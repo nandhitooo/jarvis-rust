@@ -839,6 +839,19 @@ async fn play_entry(
                             .await
                             {
                                 println!("[_play_entry] Error: {error}");
+                                if let Some(channel_id) = channel_id {
+                                    send_voice_error(
+                                        serenity_ctx,
+                                        channel_id,
+                                        err(
+                                            format!(
+                                                "Maaf, lagunya gagal diputar: {error}. Saya lanjut ke lagu berikutnya, {HONORIFIC}."
+                                            ),
+                                            Some("⚠️ Gangguan Pemutaran"),
+                                        ),
+                                    )
+                                    .await;
+                                }
                             }
                         }
                     }
@@ -879,6 +892,19 @@ async fn play_entry(
                 .await
                 {
                     println!("[_play_entry] Error: {error}");
+                    if let Some(channel_id) = channel_id {
+                        send_voice_error(
+                            serenity_ctx,
+                            channel_id,
+                            err(
+                                format!(
+                                    "Maaf, lagunya gagal diputar: {error}. Saya lanjut ke lagu berikutnya, {HONORIFIC}."
+                                ),
+                                Some("⚠️ Gangguan Pemutaran"),
+                            ),
+                        )
+                        .await;
+                    }
                 }
             }
         }
@@ -1035,13 +1061,30 @@ async fn join_author_channel(ctx: Context<'_>) -> Option<Arc<Mutex<Call>>> {
         return None;
     };
 
-    let manager = voice_manager(&ctx).await?;
+    let Some(manager) = voice_manager(&ctx).await else {
+        ctx.send(poise::CreateReply::default().embed(err(
+            "❌ Sistem voice belum siap. Coba lagi sebentar lagi ya.",
+            None,
+        )))
+        .await
+        .ok();
+        return None;
+    };
+
     match manager.get(guild_id) {
         Some(call) => {
             let mut guard = call.lock().await;
             if guard.current_channel() != Some(channel_id.into()) {
                 if let Err(error) = guard.join(channel_id).await {
                     println!("[Music] gagal pindah voice channel: {error}");
+                    drop(guard);
+                    ctx.send(poise::CreateReply::default().embed(err(
+                        format!("❌ Gagal bergabung ke voice channel: {error}"),
+                        Some("⚠️ Gagal Join Voice"),
+                    )))
+                    .await
+                    .ok();
+                    return None;
                 }
             }
             drop(guard);
@@ -1056,6 +1099,14 @@ async fn join_author_channel(ctx: Context<'_>) -> Option<Arc<Mutex<Call>>> {
             }
             Err(error) => {
                 println!("[Music] gagal join voice channel: {error}");
+                ctx.send(poise::CreateReply::default().embed(err(
+                    format!(
+                        "❌ Maaf {HONORIFIC}, saya gagal bergabung ke voice channel: {error}"
+                    ),
+                    Some("⚠️ Gagal Join Voice"),
+                )))
+                .await
+                .ok();
                 None
             }
         },
@@ -1094,13 +1145,30 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
         Some(call) => {
             if let Err(error) = call.lock().await.join(channel_id).await {
                 println!("[Music] gagal join voice: {error}");
+                ctx.send(poise::CreateReply::default().embed(err(
+                    format!("❌ Gagal bergabung ke voice channel: {error}"),
+                    Some("⚠️ Gagal Join Voice"),
+                )))
+                .await?;
+                return Ok(());
             }
             let music = ctx.data().music.clone();
             register_handlers(&music, ctx.serenity_context(), guild_id, &call).await;
         }
         None => {
-            let Ok(call) = manager.join(guild_id, channel_id).await else {
-                return Ok(());
+            let call = match manager.join(guild_id, channel_id).await {
+                Ok(call) => call,
+                Err(error) => {
+                    println!("[Music] gagal join voice: {error}");
+                    ctx.send(poise::CreateReply::default().embed(err(
+                        format!(
+                            "❌ Maaf {HONORIFIC}, saya gagal bergabung ke voice channel: {error}"
+                        ),
+                        Some("⚠️ Gagal Join Voice"),
+                    )))
+                    .await?;
+                    return Ok(());
+                }
             };
             let music = ctx.data().music.clone();
             register_handlers(&music, ctx.serenity_context(), guild_id, &call).await;
@@ -1416,6 +1484,11 @@ async fn handle_single(
     .await
     {
         println!("[Music] gagal memulai playback: {error}");
+        ctx.send(poise::CreateReply::default().embed(err(
+            format!("❌ Maaf, lagunya gagal diputar: {error}"),
+            Some("⚠️ Gangguan Pemutaran"),
+        )))
+        .await?;
     }
 
     Ok(())

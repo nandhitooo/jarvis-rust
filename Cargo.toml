@@ -17,9 +17,9 @@ serenity = { version = "0.12", features = [
     "framework",
 ] }
 poise = "0.6"
-songbird = { version = "0.4", features = ["serenity", "rustls"] }
+songbird = { version = "0.6", features = ["serenity", "rustls"] }
 symphonia = { version = "0.5", features = ["mp3", "aac", "flac", "ogg", "vorbis", "wav"] }
-reqwest = { version = "0.11", default-features = false, features = [
+reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",
     "stream",
