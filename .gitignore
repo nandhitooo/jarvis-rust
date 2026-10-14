@@ -15,3 +15,5 @@ dist/
 # Python
 __pycache__/
 *.py[cod]
+
+jarvis-rs.xml
