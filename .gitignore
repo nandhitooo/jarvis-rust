@@ -1,0 +1,17 @@
+/target/
+/graphify-out/
+/.venv/
+
+# Environment secrets
+/.env
+/.env.*
+!/.env.example
+
+# Node.js / Cloudflare Workers
+node_modules/
+.wrangler/
+dist/
+
+# Python
+__pycache__/
+*.py[cod]
