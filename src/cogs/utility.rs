@@ -307,7 +307,11 @@ pub async fn userinfo(ctx: Context<'_>, member: Option<Member>) -> Result<(), Er
                     .unwrap_or_else(|| "Unknown".to_string()),
                 true,
             )
-            .field(format!("Roles ({})", member_roles.len()), roles_value, false)
+            .field(
+                format!("Roles ({})", member_roles.len()),
+                roles_value,
+                false,
+            )
             .footer(footer(&ctx))
     };
 

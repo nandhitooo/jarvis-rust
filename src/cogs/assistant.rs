@@ -95,11 +95,7 @@ fn parse_duration(time_str: &str, allowed_units: &[char]) -> Option<Duration> {
 
 /// Setel pengingat (contoh: !j remind 10m beli kopi)
 #[poise::command(prefix_command, rename = "remind")]
-pub async fn remind(
-    ctx: Context<'_>,
-    time_str: String,
-    #[rest] task: String,
-) -> Result<(), Error> {
+pub async fn remind(ctx: Context<'_>, time_str: String, #[rest] task: String) -> Result<(), Error> {
     const BAD_FORMAT: &str = "Format waktunya belum tepat. Pakai `s` (detik), `m` (menit), `h` (jam), atau `d` (hari). Contoh: `10m`.";
 
     let delta = parse_duration(&time_str, &['s', 'm', 'h', 'd']);
@@ -401,9 +397,7 @@ fn eval_pow(base: Num, exponent: Num) -> Result<Num, EvalError> {
             let e = u32::try_from(e).map_err(|_| EvalError::Invalid)?;
             b.checked_pow(e).map(Num::Int).ok_or(EvalError::Invalid)
         }
-        _ => Ok(Num::Float(
-            base.as_f64().powf(exponent.as_f64()),
-        )),
+        _ => Ok(Num::Float(base.as_f64().powf(exponent.as_f64()))),
     }
 }
 
@@ -508,10 +502,7 @@ impl CalcParser {
             Some('-') => {
                 self.bump();
                 match self.unary()? {
-                    Num::Int(value) => value
-                        .checked_neg()
-                        .map(Num::Int)
-                        .ok_or(EvalError::Invalid),
+                    Num::Int(value) => value.checked_neg().map(Num::Int).ok_or(EvalError::Invalid),
                     Num::Float(value) => Ok(Num::Float(-value)),
                 }
             }
@@ -627,10 +618,7 @@ pub async fn calc(ctx: Context<'_>, #[rest] expr: String) -> Result<(), Error> {
     };
 
     let embed = info(
-        format!(
-            "**Input:** `{expr}`\n**Hasil:** `{}`",
-            result.py_display()
-        ),
+        format!("**Input:** `{expr}`\n**Hasil:** `{}`", result.py_display()),
         Some("🔢 Kalkulator"),
     );
     ctx.send(poise::CreateReply::default().embed(embed)).await?;

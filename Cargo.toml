@@ -34,3 +34,5 @@ scraper = "0.22"
 pdf-extract = "0.8"
 anyhow = "1"
 thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

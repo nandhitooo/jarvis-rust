@@ -269,7 +269,10 @@ pub fn commands() -> Vec<poise::Command<Data, Error>> {
 }
 
 fn footer(author: Option<&Requester>) -> Option<CreateEmbedFooter> {
-    author.map(|author| CreateEmbedFooter::new(format!("Atas permintaan {}", author.name)).icon_url(author.avatar.clone()))
+    author.map(|author| {
+        CreateEmbedFooter::new(format!("Atas permintaan {}", author.name))
+            .icon_url(author.avatar.clone())
+    })
 }
 
 /// Format durasi seperti `format_duration` di Python.
@@ -326,11 +329,11 @@ fn extract_song_metadata(data: &Value) -> HashMap<&'static str, String> {
     }
 
     let mut metadata = HashMap::new();
+    metadata.insert("artist", artist.unwrap_or_else(|| "Unknown".to_string()));
     metadata.insert(
-        "artist",
-        artist.unwrap_or_else(|| "Unknown".to_string()),
+        "album",
+        album.take().unwrap_or_else(|| "Unknown".to_string()),
     );
-    metadata.insert("album", album.take().unwrap_or_else(|| "Unknown".to_string()));
     metadata.insert(
         "uploader",
         text(data, "uploader").unwrap_or_else(|| "Unknown".to_string()),
@@ -357,7 +360,12 @@ fn entry_url(entry: &Value) -> String {
         })
 }
 
-fn build_current_embed(data: &Value, title: &str, webpage_url: &str, requester: Option<&Requester>) -> CreateEmbed {
+fn build_current_embed(
+    data: &Value,
+    title: &str,
+    webpage_url: &str,
+    requester: Option<&Requester>,
+) -> CreateEmbed {
     let metadata = extract_song_metadata(data);
     let mut embed = CreateEmbed::new()
         .title("🎶 Sedang Diputar")
@@ -410,7 +418,7 @@ fn build_added_embed(
 // ────────────────────────────────────────────────────────────
 
 async fn run_ytdlp(target: &str) -> Result<Value, String> {
-    println!("[yt-dlp] Extracting info for: {target}");
+    tracing::debug!(target = %target, "yt-dlp mengekstrak info");
 
     let output = tokio::process::Command::new("yt-dlp")
         .args([
@@ -433,9 +441,7 @@ async fn run_ytdlp(target: &str) -> Result<Value, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     if stdout.trim().is_empty() {
-        return Err(
-            "yt-dlp returned no data — the URL may be invalid or unavailable.".to_string(),
-        );
+        return Err("yt-dlp returned no data — the URL may be invalid or unavailable.".to_string());
     }
 
     serde_json::from_str::<Value>(&stdout)
@@ -570,7 +576,7 @@ async fn resolve_search(http: &reqwest::Client, search: &str) -> Result<String, 
 
     match spotify_metadata(http, search).await {
         Some(metadata) => {
-            println!("[Spotify] Resolved to: {metadata}");
+            tracing::debug!(query = %metadata, "spotify dialihkan ke pencarian youtube");
             Ok(format!("ytsearch:{metadata}"))
         }
         None => Err("Metadata dari tautan Spotify-nya tidak bisa saya ambil.".to_string()),
@@ -601,7 +607,7 @@ async fn send_voice_error(
     embed: CreateEmbed,
 ) {
     if let Err(error) = send_embed(serenity_ctx, channel_id, embed).await {
-        println!("[Music] gagal mengirim pesan: {error}");
+        tracing::error!(error = %error, "gagal mengirim pesan voice");
     }
 }
 
@@ -638,7 +644,10 @@ async fn play_next(guild_id: GuildId, serenity_ctx: &serenity::Context, music: &
                 send_voice_error(
                     serenity_ctx,
                     channel_id,
-                    info("🎵 Antrian habis. Sunyi sekali di sini, kabari saya kalau mau putar lagi.", None),
+                    info(
+                        "🎵 Antrian habis. Sunyi sekali di sini, kabari saya kalau mau putar lagi.",
+                        None,
+                    ),
                 )
                 .await;
             }
@@ -679,7 +688,7 @@ async fn schedule_disconnect(
             .guild(guild_id)
             .map(|guild| guild.name.clone())
             .unwrap_or_else(|| guild_id.to_string());
-        println!("[Jarvis] Auto-disconnect dari {guild_name}");
+        tracing::info!(guild = %guild_name, "auto-disconnect dari voice");
     });
 
     music.schedule_disconnect(guild_id, task).await;
@@ -695,8 +704,7 @@ struct ResolvedTrack {
 impl ResolvedTrack {
     fn from_data(data: Value, fallback: &str) -> Self {
         let title = text(&data, "title").unwrap_or_else(|| fallback.to_string());
-        let webpage_url =
-            text(&data, "webpage_url").unwrap_or_else(|| fallback.to_string());
+        let webpage_url = text(&data, "webpage_url").unwrap_or_else(|| fallback.to_string());
         Self {
             data,
             title,
@@ -775,7 +783,13 @@ async fn play_entry(
             let entries: Vec<Value> = value
                 .get("entries")
                 .and_then(|entries| entries.as_array())
-                .map(|entries| entries.iter().filter(|entry| !entry.is_null()).cloned().collect())
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter(|entry| !entry.is_null())
+                        .cloned()
+                        .collect()
+                })
                 .unwrap_or_default();
 
             let requester = entry.requester.clone();
@@ -838,7 +852,7 @@ async fn play_entry(
                             )
                             .await
                             {
-                                println!("[_play_entry] Error: {error}");
+                                tracing::error!(error = %error, "gagal memulai playback");
                                 if let Some(channel_id) = channel_id {
                                     send_voice_error(
                                         serenity_ctx,
@@ -891,7 +905,7 @@ async fn play_entry(
                 )
                 .await
                 {
-                    println!("[_play_entry] Error: {error}");
+                    tracing::error!(error = %error, "gagal memulai playback");
                     if let Some(channel_id) = channel_id {
                         send_voice_error(
                             serenity_ctx,
@@ -965,7 +979,7 @@ struct ErrorHandler {
 #[serenity::async_trait]
 impl EventHandler for ErrorHandler {
     async fn act(&self, _event: &EventContext<'_>) -> Option<Event> {
-        println!("[after_play] Playback error pada guild {}", self.guild_id);
+        tracing::warn!(guild_id = %self.guild_id, "playback error");
         if let Some(channel_id) = self.music.channel(self.guild_id).await {
             let embed = warn("⚠️ Maaf, ada gangguan saat memutar lagu.", None);
             send_voice_error(&self.serenity_ctx, channel_id, embed).await;
@@ -1052,10 +1066,9 @@ async fn same_voice(ctx: Context<'_>) -> bool {
 async fn join_author_channel(ctx: Context<'_>) -> Option<Arc<Mutex<Call>>> {
     let guild_id = ctx.guild_id()?;
     let Some(channel_id) = author_voice_channel(&ctx, ctx.author().id) else {
-        ctx.send(poise::CreateReply::default().embed(err(
-            "❌ Masuk ke voice channel dulu ya.",
-            None,
-        )))
+        ctx.send(
+            poise::CreateReply::default().embed(err("❌ Masuk ke voice channel dulu ya.", None)),
+        )
         .await
         .ok();
         return None;
@@ -1076,7 +1089,7 @@ async fn join_author_channel(ctx: Context<'_>) -> Option<Arc<Mutex<Call>>> {
             let mut guard = call.lock().await;
             if guard.current_channel() != Some(channel_id.into()) {
                 if let Err(error) = guard.join(channel_id).await {
-                    println!("[Music] gagal pindah voice channel: {error}");
+                    tracing::error!(error = %error, "gagal pindah voice channel");
                     drop(guard);
                     ctx.send(poise::CreateReply::default().embed(err(
                         format!("❌ Gagal bergabung ke voice channel: {error}"),
@@ -1093,16 +1106,13 @@ async fn join_author_channel(ctx: Context<'_>) -> Option<Arc<Mutex<Call>>> {
         }
         None => match manager.join(guild_id, channel_id).await {
             Ok(call) => {
-                register_handlers(&ctx.data().music, ctx.serenity_context(), guild_id, &call)
-                    .await;
+                register_handlers(&ctx.data().music, ctx.serenity_context(), guild_id, &call).await;
                 Some(call)
             }
             Err(error) => {
-                println!("[Music] gagal join voice channel: {error}");
+                tracing::error!(error = %error, "gagal join voice channel");
                 ctx.send(poise::CreateReply::default().embed(err(
-                    format!(
-                        "❌ Maaf {HONORIFIC}, saya gagal bergabung ke voice channel: {error}"
-                    ),
+                    format!("❌ Maaf {HONORIFIC}, saya gagal bergabung ke voice channel: {error}"),
                     Some("⚠️ Gagal Join Voice"),
                 )))
                 .await
@@ -1129,10 +1139,10 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
             .await
             .map(|member| member.display_name().to_string())
             .unwrap_or_else(|| ctx.author().name.clone());
-        ctx.send(poise::CreateReply::default().embed(err(
-            format!("❌ **{me}** belum masuk voice channel."),
-            None,
-        )))
+        ctx.send(
+            poise::CreateReply::default()
+                .embed(err(format!("❌ **{me}** belum masuk voice channel."), None)),
+        )
         .await?;
         return Ok(());
     };
@@ -1144,7 +1154,7 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
     match manager.get(guild_id) {
         Some(call) => {
             if let Err(error) = call.lock().await.join(channel_id).await {
-                println!("[Music] gagal join voice: {error}");
+                tracing::error!(error = %error, "gagal join voice");
                 ctx.send(poise::CreateReply::default().embed(err(
                     format!("❌ Gagal bergabung ke voice channel: {error}"),
                     Some("⚠️ Gagal Join Voice"),
@@ -1159,7 +1169,7 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
             let call = match manager.join(guild_id, channel_id).await {
                 Ok(call) => call,
                 Err(error) => {
-                    println!("[Music] gagal join voice: {error}");
+                    tracing::error!(error = %error, "gagal join voice");
                     ctx.send(poise::CreateReply::default().embed(err(
                         format!(
                             "❌ Maaf {HONORIFIC}, saya gagal bergabung ke voice channel: {error}"
@@ -1242,7 +1252,11 @@ pub async fn play(ctx: Context<'_>, #[rest] search: String) -> Result<(), Error>
 
     // Hasil dengan satu entri sebenarnya lagu tunggal — ekstrak ulang penuh.
     if let Some(entries) = result.get("entries").and_then(|entries| entries.as_array()) {
-        let candidates: Vec<Value> = entries.iter().filter(|entry| !entry.is_null()).cloned().collect();
+        let candidates: Vec<Value> = entries
+            .iter()
+            .filter(|entry| !entry.is_null())
+            .cloned()
+            .collect();
         if candidates.len() == 1 {
             let single_url = entry_url(&candidates[0]);
             match run_ytdlp(&single_url).await {
@@ -1260,17 +1274,18 @@ pub async fn play(ctx: Context<'_>, #[rest] search: String) -> Result<(), Error>
     }
 
     if result.get("entries").is_some() {
-        handle_playlist(
+        handle_playlist(ctx, guild_id, &call, &music, &result, requester.as_ref()).await?;
+    } else {
+        handle_single(
             ctx,
             guild_id,
             &call,
             &music,
-            &result,
+            result,
+            &search,
             requester.as_ref(),
         )
         .await?;
-    } else {
-        handle_single(ctx, guild_id, &call, &music, result, &search, requester.as_ref()).await?;
     }
 
     Ok(())
@@ -1287,15 +1302,19 @@ async fn handle_playlist(
     let entries: Vec<Value> = result
         .get("entries")
         .and_then(|entries| entries.as_array())
-        .map(|entries| entries.iter().filter(|entry| !entry.is_null()).cloned().collect())
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| !entry.is_null())
+                .cloned()
+                .collect()
+        })
         .unwrap_or_default();
     let playlist_thumbnail = text(result, "thumbnail");
 
     if entries.is_empty() {
         ctx.send(poise::CreateReply::default().embed(err(
-            format!(
-                "❌ Playlist-nya kosong atau tidak ada lagu yang bisa diputar, {HONORIFIC}."
-            ),
+            format!("❌ Playlist-nya kosong atau tidak ada lagu yang bisa diputar, {HONORIFIC}."),
             None,
         )))
         .await?;
@@ -1483,7 +1502,7 @@ async fn handle_single(
     )
     .await
     {
-        println!("[Music] gagal memulai playback: {error}");
+        tracing::error!(error = %error, "gagal memulai playback");
         ctx.send(poise::CreateReply::default().embed(err(
             format!("❌ Maaf, lagunya gagal diputar: {error}"),
             Some("⚠️ Gangguan Pemutaran"),
@@ -1554,10 +1573,9 @@ pub async fn resume(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    ctx.send(poise::CreateReply::default().embed(err(
-        "❌ Tidak ada lagu yang sedang dijeda.",
-        None,
-    )))
+    ctx.send(
+        poise::CreateReply::default().embed(err("❌ Tidak ada lagu yang sedang dijeda.", None)),
+    )
     .await?;
     Ok(())
 }
@@ -1580,10 +1598,9 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
         ctx.send(poise::CreateReply::default().embed(info("⏭️ Lagu dilewati.", None)))
             .await?;
     } else {
-        ctx.send(poise::CreateReply::default().embed(err(
-            "❌ Belum ada lagu yang bisa dilewati.",
-            None,
-        )))
+        ctx.send(
+            poise::CreateReply::default().embed(err("❌ Belum ada lagu yang bisa dilewati.", None)),
+        )
         .await?;
     }
     Ok(())
@@ -1596,10 +1613,9 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     };
     let Some(call) = current_call(&ctx).await else {
-        ctx.send(poise::CreateReply::default().embed(err(
-            "❌ Saya belum masuk voice channel.",
-            None,
-        )))
+        ctx.send(
+            poise::CreateReply::default().embed(err("❌ Saya belum masuk voice channel.", None)),
+        )
         .await?;
         return Ok(());
     };
@@ -1713,12 +1729,7 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Tampilkan history lagu yang sudah diputar
-#[poise::command(
-    prefix_command,
-    rename = "playinghistory",
-    aliases("ph"),
-    guild_only
-)]
+#[poise::command(prefix_command, rename = "playinghistory", aliases("ph"), guild_only)]
 pub async fn playing_history(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
@@ -1727,10 +1738,10 @@ pub async fn playing_history(ctx: Context<'_>) -> Result<(), Error> {
     let history = music.history_snapshot(guild_id).await;
 
     if history.is_empty() {
-        ctx.send(poise::CreateReply::default().embed(info(
-            "📭 Belum ada lagu yang pernah diputar.",
-            None,
-        )))
+        ctx.send(
+            poise::CreateReply::default()
+                .embed(info("📭 Belum ada lagu yang pernah diputar.", None)),
+        )
         .await?;
         return Ok(());
     }
@@ -1772,10 +1783,9 @@ pub async fn volume(ctx: Context<'_>, vol: i64) -> Result<(), Error> {
     };
 
     if !(0..=100).contains(&vol) {
-        ctx.send(poise::CreateReply::default().embed(err(
-            "❌ Volume harus di antara 0 dan 100.",
-            None,
-        )))
+        ctx.send(
+            poise::CreateReply::default().embed(err("❌ Volume harus di antara 0 dan 100.", None)),
+        )
         .await?;
         return Ok(());
     }
@@ -1841,10 +1851,9 @@ pub async fn remove(ctx: Context<'_>, index: i64) -> Result<(), Error> {
         }
     }
 
-    ctx.send(poise::CreateReply::default().embed(err(
-        "❌ Nomor lagu itu tidak ada di antrian.",
-        None,
-    )))
+    ctx.send(
+        poise::CreateReply::default().embed(err("❌ Nomor lagu itu tidak ada di antrian.", None)),
+    )
     .await?;
     Ok(())
 }

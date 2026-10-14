@@ -13,8 +13,8 @@ use serenity::all::{
     ActivityData, ChannelId, ComponentInteraction, ComponentInteractionDataKind, CreateActionRow,
     CreateEmbed, CreateEmbedAuthor, CreateEmbedFooter, CreateInteractionResponse,
     CreateInteractionResponseMessage, CreateMessage, CreateSelectMenu, CreateSelectMenuKind,
-    CreateSelectMenuOption, EditMessage, FullEvent, GatewayIntents, Interaction, Message, MessageId,
-    OnlineStatus, ReactionType, UserId,
+    CreateSelectMenuOption, EditMessage, FullEvent, GatewayIntents, Interaction, Message,
+    MessageId, OnlineStatus, ReactionType, UserId,
 };
 use songbird::SerenityInit;
 
@@ -86,7 +86,10 @@ fn help_components(disabled: bool) -> Vec<CreateActionRow> {
 
 fn now_hhmm() -> String {
     match config::timezone() {
-        Some(timezone) => Utc::now().with_timezone(&timezone).format("%H:%M").to_string(),
+        Some(timezone) => Utc::now()
+            .with_timezone(&timezone)
+            .format("%H:%M")
+            .to_string(),
         None => chrono::Local::now().format("%H:%M").to_string(),
     }
 }
@@ -328,7 +331,10 @@ async fn handle_component(
     }
 
     let owner = {
-        let guard = data.help_menus.lock().unwrap_or_else(|error| error.into_inner());
+        let guard = data
+            .help_menus
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         guard.get(&component.message.id).copied()
     };
     let Some(owner) = owner else {
@@ -391,7 +397,7 @@ async fn handle_component(
 
 async fn reply_embed(ctx: Context<'_>, embed: CreateEmbed) {
     if let Err(error) = ctx.send(poise::CreateReply::default().embed(embed)).await {
-        println!("[Error] gagal mengirim pesan error: {error}");
+        tracing::error!(error = %error, "gagal mengirim embed error");
     }
 }
 
@@ -415,12 +421,15 @@ fn missing_param_name(ctx: &Context<'_>) -> String {
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     match error {
         poise::FrameworkError::UnknownCommand {
-            msg, ctx, framework, ..
+            msg,
+            ctx,
+            framework,
+            ..
         } => {
             let content = msg.content.trim().to_ascii_lowercase();
             if content == "!jarvis" || content == "!j" {
                 if let Err(error) = send_help_from_message(ctx, framework.user_data, msg).await {
-                    println!("[Error] gagal mengirim menu bantuan: {error}");
+                    tracing::error!(error = %error, "gagal mengirim menu bantuan");
                 }
             }
             // Perintah yang tidak dikenal diabaikan.
@@ -428,6 +437,11 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
         poise::FrameworkError::ArgumentParse {
             error, input, ctx, ..
         } => {
+            tracing::debug!(
+                command = %ctx.command().qualified_name,
+                user_id = %ctx.author().id,
+                "argumen tidak valid"
+            );
             let embed = if input.is_none() && error.is::<poise::TooFewArguments>() {
                 err(
                     format!(
@@ -449,6 +463,12 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             ctx,
             ..
         } => {
+            tracing::debug!(
+                command = %ctx.command().qualified_name,
+                user_id = %ctx.author().id,
+                remaining_ms = remaining_cooldown.as_millis() as u64,
+                "cooldown aktif"
+            );
             reply_embed(
                 ctx,
                 warn(
@@ -471,9 +491,23 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             )
             .await;
         }
+        poise::FrameworkError::MissingUserPermissions { ctx, .. }
+        | poise::FrameworkError::MissingBotPermissions { ctx, .. } => {
+            tracing::warn!(
+                command = %ctx.command().qualified_name,
+                user_id = %ctx.author().id,
+                "permission tidak cukup"
+            );
+            reply_embed(
+                ctx,
+                err(
+                    "Kamu tidak punya izin untuk perintah ini.",
+                    Some("❌ Akses Ditolak"),
+                ),
+            )
+            .await;
+        }
         poise::FrameworkError::NotAnOwner { ctx, .. }
-        | poise::FrameworkError::MissingUserPermissions { ctx, .. }
-        | poise::FrameworkError::MissingBotPermissions { ctx, .. }
         | poise::FrameworkError::CommandCheckFailed { ctx, .. } => {
             reply_embed(
                 ctx,
@@ -485,7 +519,12 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
             .await;
         }
         poise::FrameworkError::Command { error, ctx, .. } => {
-            println!("[Error] Command '{}': {error}", ctx.command().qualified_name);
+            tracing::error!(
+                command = %ctx.command().qualified_name,
+                user_id = %ctx.author().id,
+                error = %error,
+                "command gagal"
+            );
             reply_embed(
                 ctx,
                 warn(
@@ -503,6 +542,19 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
 // Entry point
 // ────────────────────────────────────────────────────────────
 
+/// Catat setiap perintah yang diterima sebelum dijalankan.
+fn pre_command(ctx: Context<'_>) -> poise::BoxFuture<'_, ()> {
+    Box::pin(async move {
+        tracing::info!(
+            command = %ctx.command().qualified_name,
+            user_id = %ctx.author().id,
+            guild_id = ?ctx.guild_id(),
+            channel_id = %ctx.channel_id(),
+            "perintah diterima"
+        );
+    })
+}
+
 fn command_list() -> Vec<poise::Command<Data, Error>> {
     let mut commands = Vec::new();
     commands.extend(utility::commands());
@@ -517,11 +569,18 @@ fn command_list() -> Vec<poise::Command<Data, Error>> {
 async fn main() -> Result<(), Error> {
     let _ = dotenvy::dotenv();
 
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        tracing_subscriber::EnvFilter::new(
+            "jarvis_rs=info,serenity=warn,songbird=warn,hyper=warn,reqwest=warn",
+        )
+    });
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
     let token = std::env::var("DISCORD_TOKEN")
         .ok()
         .filter(|token| !token.is_empty());
     let Some(token) = token else {
-        println!("[Error] DISCORD_TOKEN tidak ditemukan di file .env");
+        tracing::error!("DISCORD_TOKEN tidak ditemukan di file .env");
         return Ok(());
     };
 
@@ -535,6 +594,7 @@ async fn main() -> Result<(), Error> {
                 ..Default::default()
             },
             on_error: |error| Box::pin(on_error(error)),
+            pre_command,
             event_handler: |ctx, event, _framework, data| {
                 Box::pin(async move {
                     if let FullEvent::InteractionCreate {
@@ -542,7 +602,7 @@ async fn main() -> Result<(), Error> {
                     } = event
                     {
                         if let Err(error) = handle_component(ctx, component, data).await {
-                            println!("[Error] interaction: {error}");
+                            tracing::error!(error = %error, "interaction gagal");
                         }
                     }
                     Ok(())
@@ -553,10 +613,10 @@ async fn main() -> Result<(), Error> {
         .setup(|ctx, ready, _framework| {
             Box::pin(async move {
                 for cog in COGS {
-                    println!("[Jarvis] Loaded: cogs.{}", cog.to_lowercase());
+                    tracing::info!(cog = %cog.to_lowercase(), "cog dimuat");
                 }
-                println!("[Jarvis] {} siap! ({})", ready.user.name, ready.user.id);
-                println!("[Jarvis] Cogs aktif: {}", COGS.join(", "));
+                tracing::info!(user = %ready.user.name, user_id = %ready.user.id, "bot siap");
+                tracing::info!(cogs = %COGS.join(", "), "cog aktif");
 
                 ctx.set_presence(
                     Some(ActivityData::listening("!jarvis")),
@@ -593,9 +653,9 @@ async fn main() -> Result<(), Error> {
     if let Err(error) = client.start().await {
         let text = error.to_string();
         if text.contains("401") || text.contains("Unauthorized") {
-            println!("[Error] Token Discord tidak valid. Periksa file .env kamu.");
+            tracing::error!("token Discord tidak valid, periksa file .env");
         } else {
-            println!("[Error] Bot crash: {error}");
+            tracing::error!(error = %error, "bot crash");
         }
     }
 

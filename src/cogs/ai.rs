@@ -1,7 +1,7 @@
 //! AI cog: chat, web search, PDF summarization, and image generation.
 
 use std::net::IpAddr;
-use std::time::Duration as StdDuration;
+use std::time::{Duration as StdDuration, Instant};
 
 use chrono::Utc;
 use poise::serenity_prelude as serenity;
@@ -41,23 +41,21 @@ impl AiState {
 
         let available = match (&jarvis_api_url, &jarvis_api_key) {
             (Some(url), Some(_)) => {
-                println!("[AI] ✅ Jarvis Custom API: {url}");
+                tracing::info!(url = %url, "custom API AI aktif");
                 true
             }
             (Some(_), None) => {
-                println!(
-                    "[AI] ⚠️  JARVIS_API_URL diatur tetapi JARVIS_API_SECRET kosong. Custom API dinonaktifkan."
+                tracing::warn!(
+                    "JARVIS_API_URL diatur tanpa JARVIS_API_SECRET, custom API dinonaktifkan"
                 );
                 false
             }
             (None, _) => {
                 if groq_api_key.is_some() {
-                    println!("[AI] ✅ Groq API configured (direct).");
+                    tracing::info!("backend Groq langsung aktif");
                     true
                 } else {
-                    println!(
-                        "[AI] ⚠️  No AI backend configured (set JARVIS_API_URL or GROQ_API_KEY)"
-                    );
+                    tracing::warn!("tidak ada backend AI yang dikonfigurasi");
                     false
                 }
             }
@@ -73,7 +71,10 @@ impl AiState {
         }
         if models.is_empty() {
             models = vec![
-                ("openai/gpt-oss-120b".to_string(), "GPT-OSS 120B".to_string()),
+                (
+                    "openai/gpt-oss-120b".to_string(),
+                    "GPT-OSS 120B".to_string(),
+                ),
                 ("openai/gpt-oss-20b".to_string(), "GPT-OSS 20B".to_string()),
                 ("qwen/qwen3.6-27b".to_string(), "Qwen3.6 27B".to_string()),
             ];
@@ -278,7 +279,7 @@ async fn query_groq_direct(
 
     let mut last_error: Option<String> = None;
     for (model_id, model_label) in &data.ai.models {
-        println!("[AI] Trying Groq model: {model_id}");
+        tracing::debug!(model = %model_id, "mencoba model groq");
         let response = data
             .http
             .post("https://api.groq.com/openai/v1/chat/completions")
@@ -314,7 +315,7 @@ async fn query_groq_direct(
                             Some(answer) => return Ok((answer, model_label.clone())),
                             None => {
                                 let text = payload.to_string();
-                                println!("[AI] {model_id} failed: {text}");
+                                tracing::warn!(model = %model_id, error = %text, "model groq gagal");
                                 if contains_code(&text, "401")
                                     || text.to_lowercase().contains("invalid_api_key")
                                 {
@@ -325,7 +326,7 @@ async fn query_groq_direct(
                         }
                     }
                     Err(error) => {
-                        println!("[AI] {model_id} failed: {error}");
+                        tracing::warn!(model = %model_id, error = %error, "model groq gagal");
                         last_error = Some(error.to_string());
                     }
                 }
@@ -333,7 +334,7 @@ async fn query_groq_direct(
             }
             Err(error) => {
                 let text = error.to_string();
-                println!("[AI] {model_id} failed: {text}");
+                tracing::warn!(model = %model_id, error = %text, "model groq gagal");
                 if contains_code(&text, "401") || text.to_lowercase().contains("invalid_api_key") {
                     return Err("🔑 **API Key Groq tidak valid.**".to_string());
                 }
@@ -376,7 +377,8 @@ async fn send_response(ctx: Context<'_>, answer: &str, used_model: &str) -> Resu
     Ok(())
 }
 
-const NO_BACKEND: &str = "❌ Backend AI belum aktif. Set `JARVIS_API_URL` + `JARVIS_API_SECRET`, atau `GROQ_API_KEY`.";
+const NO_BACKEND: &str =
+    "❌ Backend AI belum aktif. Set `JARVIS_API_URL` + `JARVIS_API_SECRET`, atau `GROQ_API_KEY`.";
 
 /// Tanyakan sesuatu ke Jarvis AI
 #[poise::command(
@@ -403,12 +405,9 @@ pub async fn ask(ctx: Context<'_>, #[rest] question: String) -> Result<(), Error
             send_response(ctx, &answer, &used_model).await?;
         }
         Err(error) => {
-            println!("[AI] Error: {error}");
-            ctx.send(poise::CreateReply::default().embed(err(
-                friendly_error(&error),
-                None,
-            )))
-            .await?;
+            tracing::error!(error = %error, "perintah ask gagal");
+            ctx.send(poise::CreateReply::default().embed(err(friendly_error(&error), None)))
+                .await?;
         }
     }
 
@@ -453,17 +452,15 @@ Akurasi selalu lebih penting daripada gaya bicara."
     {
         Ok((mut answer, used_model)) => {
             if answer.trim().is_empty() {
-                answer = format!("Maaf, saya belum menemukan info yang relevan untuk itu, {HONORIFIC}.");
+                answer =
+                    format!("Maaf, saya belum menemukan info yang relevan untuk itu, {HONORIFIC}.");
             }
             send_response(ctx, &answer, &used_model).await?;
         }
         Err(error) => {
-            println!("[AI] Search error: {error}");
-            ctx.send(poise::CreateReply::default().embed(err(
-                friendly_error(&error),
-                None,
-            )))
-            .await?;
+            tracing::error!(error = %error, "perintah search gagal");
+            ctx.send(poise::CreateReply::default().embed(err(friendly_error(&error), None)))
+                .await?;
         }
     }
 
@@ -538,7 +535,8 @@ fn is_blocked_ip(ip: IpAddr) -> bool {
                 || (segments[0] & 0xffc0) == 0xfe80
                 || (segments[0] & 0xfe00) == 0xfc00
                 || (segments[0] & 0xff00) == 0xff00
-                || v6.to_ipv4_mapped()
+                || v6
+                    .to_ipv4_mapped()
                     .map(|mapped| is_blocked_ip(IpAddr::V4(mapped)))
                     .unwrap_or(false)
         }
@@ -698,10 +696,10 @@ pub async fn summarize(ctx: Context<'_>, #[rest] pdf_url: Option<String>) -> Res
 
     let (attachment, url) = if let Some(attachment) = attachments.first() {
         if !attachment.filename.to_lowercase().ends_with(".pdf") {
-            ctx.send(poise::CreateReply::default().embed(err(
-                "❌ File yang dilampirkan bukan PDF.",
-                None,
-            )))
+            ctx.send(
+                poise::CreateReply::default()
+                    .embed(err("❌ File yang dilampirkan bukan PDF.", None)),
+            )
             .await?;
             return Ok(());
         }
@@ -742,7 +740,7 @@ pub async fn summarize(ctx: Context<'_>, #[rest] pdf_url: Option<String>) -> Res
             return Ok(());
         }
         Err(PdfError::Transport(error)) => {
-            println!("[AI] Summarize error: {error}");
+            tracing::error!(error = %error, "summarize gagal");
             set_status(ctx, &status_msg, &friendly_error(&error), COLOR_ERROR).await?;
             return Ok(());
         }
@@ -763,7 +761,7 @@ pub async fn summarize(ctx: Context<'_>, #[rest] pdf_url: Option<String>) -> Res
             return Ok(());
         }
         Err(error) => {
-            println!("[AI] Summarize error: {error}");
+            tracing::error!(error = %error, "summarize gagal");
             set_status(
                 ctx,
                 &status_msg,
@@ -812,11 +810,7 @@ Akurasi selalu lebih penting daripada gaya bicara.\n\n\
             let _ = status_msg.delete(ctx).await;
             let filename = match &attachment {
                 Some(attachment) => attachment.filename.clone(),
-                None => url
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string(),
+                None => url.rsplit('/').next().unwrap_or_default().to_string(),
             };
             let mut header = format!("📄 **Ringkasan: {filename}**");
             if truncated {
@@ -828,7 +822,7 @@ Akurasi selalu lebih penting daripada gaya bicara.\n\n\
         Err(error) => error,
     };
 
-    println!("[AI] Summarize error: {error}");
+    tracing::error!(error = %error, "summarize gagal");
     set_status(ctx, &status_msg, &friendly_error(&error), COLOR_ERROR).await?;
     Ok(())
 }
@@ -837,51 +831,359 @@ Akurasi selalu lebih penting daripada gaya bicara.\n\n\
 // Gambar AI
 // ────────────────────────────────────────────────────────────
 
-async fn generate_image(data: &Data, prompt: &str) -> Result<Vec<u8>, String> {
+/// Batas panjang prompt yang diterima worker gambar, dalam karakter.
+const MAX_IMAGE_PROMPT_CHARS: usize = 500;
+
+/// Ukuran maksimum gambar yang mau kita kirim ke Discord (8 MB).
+const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+
+/// Total percobaan: 1 percobaan awal + 2 percobaan ulang.
+const MAX_IMAGE_ATTEMPTS: u32 = 3;
+
+/// Jeda backoff antar percobaan ulang: 2 detik lalu 5 detik.
+const IMAGE_RETRY_DELAYS: [StdDuration; 2] = [StdDuration::from_secs(2), StdDuration::from_secs(5)];
+
+/// Timeout satu request ke worker gambar (lebih longgar dari budget worker 55 detik).
+const IMAGE_REQUEST_TIMEOUT: StdDuration = StdDuration::from_secs(65);
+
+/// Kegagalan yang mungkin terjadi saat membuat gambar lewat worker.
+#[derive(Debug, thiserror::Error)]
+enum ImageError {
+    #[error("image backend not configured")]
+    NotConfigured,
+    #[error("prompt melebihi batas karakter")]
+    PromptTooLong,
+    #[error("request timeout")]
+    Timeout,
+    #[error("rate limited (retry_after={0:?})")]
+    RateLimited(Option<u64>),
+    #[error("unauthorized")]
+    Unauthorized,
+    #[error("upstream error")]
+    Upstream,
+    #[error("bad response")]
+    BadResponse,
+    #[error("image too large")]
+    TooLarge,
+    #[error("network error")]
+    Network,
+}
+
+impl ImageError {
+    /// Pesan siap tampil ke pengguna, tanpa detail internal.
+    fn user_message(&self) -> String {
+        match self {
+            Self::NotConfigured => {
+                format!("⚠️ Maaf {HONORIFIC}, layanan gambar belum aktif. Lapor admin ya.")
+            }
+            Self::PromptTooLong => format!(
+                "⚠️ Promptnya kepanjangan, {HONORIFIC}. Maksimal {MAX_IMAGE_PROMPT_CHARS} karakter ya."
+            ),
+            Self::Timeout => format!(
+                "⏳ Gambarnya belum selesai tepat waktu, {HONORIFIC}. Coba lagi sebentar lagi ya."
+            ),
+            Self::RateLimited(_) => format!(
+                "🐢 Terlalu banyak permintaan gambar, {HONORIFIC}. Coba lagi beberapa saat lagi ya."
+            ),
+            Self::Unauthorized => {
+                format!("🔑 Akses ke layanan gambar ditolak, {HONORIFIC}. Lapor admin ya.")
+            }
+            Self::Upstream => format!(
+                "🔧 Layanan gambar sedang gangguan, {HONORIFIC}. Coba lagi nanti ya."
+            ),
+            Self::BadResponse => format!(
+                "⚠️ Layanan gambar mengirim hasil yang tidak valid, {HONORIFIC}. Coba lagi ya."
+            ),
+            Self::TooLarge => format!(
+                "📦 Gambarnya terlalu besar untuk saya kirim, {HONORIFIC}. Coba prompt lain ya."
+            ),
+            Self::Network => format!(
+                "🌐 Koneksi ke layanan gambar bermasalah, {HONORIFIC}. Coba lagi ya."
+            ),
+        }
+    }
+
+    /// Hanya kegagalan sementara yang layak dicoba ulang.
+    fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Timeout | Self::RateLimited(_) | Self::Upstream | Self::Network
+        )
+    }
+
+    /// Jeda dari header `Retry-After`, dipakai hanya bila ≤ 10 detik.
+    fn retry_after(&self) -> Option<StdDuration> {
+        match self {
+            Self::RateLimited(Some(seconds)) if *seconds <= 10 => {
+                Some(StdDuration::from_secs(*seconds))
+            }
+            _ => None,
+        }
+    }
+
+    /// Peta status HTTP worker ke varian error yang sesuai.
+    fn from_status(status: u16, retry_after: Option<u64>) -> Self {
+        match status {
+            400 => Self::PromptTooLong,
+            401 | 403 => Self::Unauthorized,
+            429 => Self::RateLimited(retry_after),
+            500..=599 => Self::Upstream,
+            _ => Self::BadResponse,
+        }
+    }
+
+    /// Nama varian untuk keperluan log terstruktur.
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::NotConfigured => "NotConfigured",
+            Self::PromptTooLong => "PromptTooLong",
+            Self::Timeout => "Timeout",
+            Self::RateLimited(_) => "RateLimited",
+            Self::Unauthorized => "Unauthorized",
+            Self::Upstream => "Upstream",
+            Self::BadResponse => "BadResponse",
+            Self::TooLarge => "TooLarge",
+            Self::Network => "Network",
+        }
+    }
+}
+
+/// Hasil satu request gambar yang berhasil, lengkap dengan metadata worker.
+#[derive(Debug)]
+struct GeneratedImage {
+    bytes: Vec<u8>,
+    content_type: String,
+    model: String,
+    final_prompt: String,
+    worker_attempts: u32,
+    verified: String,
+    elapsed: StdDuration,
+}
+
+impl GeneratedImage {
+    /// Nama lampiran, ekstensinya mengikuti content-type worker.
+    fn file_name(&self) -> String {
+        let extension = match self.content_type.as_str() {
+            "image/jpeg" => "jpg",
+            "image/webp" => "webp",
+            _ => "png",
+        };
+        format!("jarvis_image.{extension}")
+    }
+}
+
+/// Percent-decode nilai header worker (`X-Final-Prompt`), murni dengan std.
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+            {
+                decoded.push(high * 16 + low);
+                index += 3;
+                continue;
+            }
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// Nilai heksadesimal satu byte, `None` bila bukan digit hex.
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Ambil header respons sebagai `String` yang sudah aman UTF-8.
+fn header_value(response: &reqwest::Response, name: &str) -> Option<String> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string())
+}
+
+/// Satu percobaan membuat gambar, menerjemahkan kegagalan ke `ImageError`.
+async fn generate_image(
+    data: &Data,
+    prompt: &str,
+    attempt: u32,
+) -> Result<GeneratedImage, ImageError> {
     let url = data
         .ai
         .custom_image_url
         .as_ref()
-        .ok_or_else(|| "Image API belum dikonfigurasi.".to_string())?;
+        .ok_or(ImageError::NotConfigured)?;
     let api_key = data.ai.custom_image_key.clone().unwrap_or_default();
+    let prompt_len = prompt.chars().count() as u64;
+    let prompt_head: String = prompt.chars().take(80).collect();
 
-    let response = data
+    let started = Instant::now();
+    let response = match data
         .http
         .post(url)
         .header("Authorization", format!("Bearer {api_key}"))
         .json(&json!({ "prompt": prompt }))
-        .timeout(StdDuration::from_secs(60))
+        .timeout(IMAGE_REQUEST_TIMEOUT)
         .send()
         .await
-        .map_err(|error| error.to_string())?;
+    {
+        Ok(response) => response,
+        Err(error) => {
+            let kind = if error.is_timeout() {
+                ImageError::Timeout
+            } else {
+                ImageError::Network
+            };
+            tracing::warn!(
+                attempt,
+                error_kind = kind.kind(),
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                prompt_len,
+                prompt_head = %prompt_head,
+                error = %error,
+                "image request gagal"
+            );
+            return Err(kind);
+        }
+    };
 
-    if response.status().as_u16() != 200 {
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        let preview: String = text.chars().take(150).collect();
-        return Err(format!("Image API HTTP {status}: {preview}"));
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok());
+        let kind = ImageError::from_status(status, retry_after);
+        tracing::warn!(
+            attempt,
+            status,
+            error_kind = kind.kind(),
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            prompt_len,
+            prompt_head = %prompt_head,
+            "image request gagal"
+        );
+        return Err(kind);
     }
 
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
+    let content_type = header_value(&response, "content-type")
         .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
         .to_lowercase();
+    let model = header_value(&response, "x-model").unwrap_or_default();
+    let final_prompt = header_value(&response, "x-final-prompt")
+        .map(|value| percent_decode(&value))
+        .unwrap_or_default();
+    let worker_attempts = header_value(&response, "x-attempts")
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(1);
+    let verified = header_value(&response, "x-verified").unwrap_or_default();
 
     if !content_type.starts_with("image/") {
-        let text = response.text().await.unwrap_or_default();
-        let preview: String = text.chars().take(150).collect();
-        return Err(format!(
-            "Respons bukan gambar (Content-Type: {content_type}): {preview}"
-        ));
+        let kind = ImageError::BadResponse;
+        tracing::warn!(
+            attempt,
+            status,
+            error_kind = kind.kind(),
+            content_type = %content_type,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            prompt_len,
+            prompt_head = %prompt_head,
+            "image response tidak valid"
+        );
+        return Err(kind);
     }
 
-    response
-        .bytes()
-        .await
-        .map(|bytes| bytes.to_vec())
-        .map_err(|error| error.to_string())
+    let bytes = match response.bytes().await {
+        Ok(bytes) => bytes.to_vec(),
+        Err(error) => {
+            let kind = if error.is_timeout() {
+                ImageError::Timeout
+            } else {
+                ImageError::Network
+            };
+            tracing::warn!(
+                attempt,
+                error_kind = kind.kind(),
+                elapsed_ms = started.elapsed().as_millis() as u64,
+                prompt_len,
+                prompt_head = %prompt_head,
+                error = %error,
+                "image response gagal dibaca"
+            );
+            return Err(kind);
+        }
+    };
+
+    if bytes.len() < 1000 {
+        let kind = ImageError::BadResponse;
+        tracing::warn!(
+            attempt,
+            status,
+            error_kind = kind.kind(),
+            bytes = bytes.len() as u64,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            prompt_len,
+            prompt_head = %prompt_head,
+            "image response terlalu kecil"
+        );
+        return Err(kind);
+    }
+    if bytes.len() > MAX_IMAGE_BYTES {
+        let kind = ImageError::TooLarge;
+        tracing::warn!(
+            attempt,
+            status,
+            error_kind = kind.kind(),
+            bytes = bytes.len() as u64,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            prompt_len,
+            prompt_head = %prompt_head,
+            "image response terlalu besar"
+        );
+        return Err(kind);
+    }
+
+    let image = GeneratedImage {
+        bytes,
+        content_type,
+        model,
+        final_prompt,
+        worker_attempts,
+        verified,
+        elapsed: started.elapsed(),
+    };
+    tracing::info!(
+        attempt,
+        status,
+        elapsed_ms = image.elapsed.as_millis() as u64,
+        bytes = image.bytes.len() as u64,
+        content_type = %image.content_type,
+        model = %image.model,
+        verified = %image.verified,
+        worker_attempts = image.worker_attempts,
+        prompt_len,
+        prompt_head = %prompt_head,
+        final_prompt_len = image.final_prompt.chars().count() as u64,
+        final_prompt_head = %image.final_prompt.chars().take(80).collect::<String>(),
+        "image request sukses"
+    );
+
+    Ok(image)
 }
 
 /// Buat gambar AI dari deskripsi teks
@@ -893,9 +1195,30 @@ async fn generate_image(data: &Data, prompt: &str) -> Result<Vec<u8>, String> {
 )]
 pub async fn image(ctx: Context<'_>, #[rest] prompt: String) -> Result<(), Error> {
     if ctx.data().ai.custom_image_url.is_none() || ctx.data().ai.custom_image_key.is_none() {
-        ctx.send(poise::CreateReply::default().embed(err(
-            "❌ **Image API** belum dikonfigurasi di `.env`.",
-            None,
+        ctx.send(
+            poise::CreateReply::default()
+                .embed(err("❌ **Image API** belum dikonfigurasi di `.env`.", None)),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let prompt = prompt.trim().to_string();
+    let prompt_chars = prompt.chars().count();
+    if prompt.is_empty() {
+        ctx.send(poise::CreateReply::default().embed(warn(
+            format!("⚠️ Deskripsinya masih kosong, {HONORIFIC}. Tulis sesuatu dulu ya."),
+            Some("⚠️ Prompt Kosong"),
+        )))
+        .await?;
+        return Ok(());
+    }
+    if prompt_chars > MAX_IMAGE_PROMPT_CHARS {
+        ctx.send(poise::CreateReply::default().embed(warn(
+            format!(
+                "⚠️ Promptnya {prompt_chars} karakter, {HONORIFIC}. Maksimal {MAX_IMAGE_PROMPT_CHARS} karakter ya."
+            ),
+            Some("⚠️ Prompt Terlalu Panjang"),
         )))
         .await?;
         return Ok(());
@@ -912,15 +1235,41 @@ pub async fn image(ctx: Context<'_>, #[rest] prompt: String) -> Result<(), Error
 
     let _typing = ctx.defer_or_broadcast().await;
 
-    match generate_image(ctx.data(), &prompt).await {
-        Ok(bytes) => {
-            let _ = status_msg.delete(ctx).await;
+    let mut attempt: u32 = 0;
+    let result = loop {
+        attempt += 1;
+        match generate_image(ctx.data(), &prompt, attempt).await {
+            Ok(image) => break Ok(image),
+            Err(error) => {
+                if attempt < MAX_IMAGE_ATTEMPTS && error.is_retryable() {
+                    let next = attempt + 1;
+                    let _ = status_msg
+                        .edit(
+                            ctx,
+                            poise::CreateReply::default()
+                                .embed(warn(format!("⏳ Percobaan ke-{next}…"), None)),
+                        )
+                        .await;
+                    let delay = error
+                        .retry_after()
+                        .or_else(|| IMAGE_RETRY_DELAYS.get((attempt - 1) as usize).copied())
+                        .unwrap_or(StdDuration::from_secs(5));
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                break Err(error);
+            }
+        }
+    };
 
+    match result {
+        Ok(image) => {
+            let file_name = image.file_name();
             let embed = CreateEmbed::new()
                 .title("🖼️ Gambar Sudah Jadi")
                 .description(format!("**Prompt:** {prompt}"))
                 .color(COLOR_INFO)
-                .image("attachment://jarvis_image.png")
+                .image(format!("attachment://{file_name}"))
                 .footer(
                     CreateEmbedFooter::new(format!(
                         "Powered by Jarvis Image API • Atas permintaan {}",
@@ -929,23 +1278,119 @@ pub async fn image(ctx: Context<'_>, #[rest] prompt: String) -> Result<(), Error
                     .icon_url(ctx.author().face()),
                 );
 
-            let attachment = CreateAttachment::bytes(bytes, "jarvis_image.png");
-            ctx.send(poise::CreateReply::default().embed(embed).attachment(attachment))
-                .await?;
+            let attachment = CreateAttachment::bytes(image.bytes, file_name);
+            match ctx
+                .send(
+                    poise::CreateReply::default()
+                        .embed(embed)
+                        .attachment(attachment),
+                )
+                .await
+            {
+                Ok(_) => {
+                    let _ = status_msg.delete(ctx).await;
+                }
+                Err(error) => {
+                    tracing::error!(error = %error, "gagal mengirim gambar ke discord");
+                    let embed = err(
+                        format!(
+                            "⚠️ Gambarnya sudah jadi, tapi gagal saya kirim, {HONORIFIC}. Coba lagi ya."
+                        ),
+                        None,
+                    );
+                    let _ = status_msg
+                        .edit(ctx, poise::CreateReply::default().embed(embed))
+                        .await;
+                }
+            }
         }
         Err(error) => {
-            println!("[AI] Image generation failed: {error}");
-            let message = if error.trim().is_empty() {
-                "Exception".to_string()
-            } else {
-                error
-            };
-            let embed = err(format!("⚠️ Maaf, gambar gagal dibuat: `{message}`"), None);
-            status_msg
+            tracing::warn!(
+                error_kind = error.kind(),
+                "gambar gagal setelah semua percobaan"
+            );
+            let embed = err(error.user_message(), None);
+            let _ = status_msg
                 .edit(ctx, poise::CreateReply::default().embed(embed))
-                .await?;
+                .await;
         }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+
+    #[test]
+    fn percent_decode_menerjemahkan_escape() {
+        assert_eq!(percent_decode("a%20b%2Fc"), "a b/c");
+        assert_eq!(percent_decode("100%25"), "100%");
+        assert_eq!(percent_decode("tanpa_escape"), "tanpa_escape");
+    }
+
+    #[test]
+    fn percent_decode_membiarkan_escape_tidak_lengkap() {
+        assert_eq!(percent_decode("bad%2"), "bad%2");
+        assert_eq!(percent_decode("%ZZ"), "%ZZ");
+    }
+
+    #[test]
+    fn percent_decode_mengganti_byte_tidak_valid() {
+        assert_eq!(percent_decode("%FF"), "\u{FFFD}");
+    }
+
+    #[test]
+    fn status_dipetakan_ke_varian_yang_tepat() {
+        assert!(matches!(
+            ImageError::from_status(400, None),
+            ImageError::PromptTooLong
+        ));
+        assert!(matches!(
+            ImageError::from_status(401, None),
+            ImageError::Unauthorized
+        ));
+        assert!(matches!(
+            ImageError::from_status(403, None),
+            ImageError::Unauthorized
+        ));
+        assert!(matches!(
+            ImageError::from_status(429, Some(3)),
+            ImageError::RateLimited(Some(3))
+        ));
+        assert!(matches!(
+            ImageError::from_status(503, None),
+            ImageError::Upstream
+        ));
+        assert!(matches!(
+            ImageError::from_status(418, None),
+            ImageError::BadResponse
+        ));
+    }
+
+    #[test]
+    fn hanya_error_sementara_yang_retryable() {
+        assert!(ImageError::Timeout.is_retryable());
+        assert!(ImageError::RateLimited(None).is_retryable());
+        assert!(ImageError::Upstream.is_retryable());
+        assert!(ImageError::Network.is_retryable());
+
+        assert!(!ImageError::NotConfigured.is_retryable());
+        assert!(!ImageError::PromptTooLong.is_retryable());
+        assert!(!ImageError::Unauthorized.is_retryable());
+        assert!(!ImageError::BadResponse.is_retryable());
+        assert!(!ImageError::TooLarge.is_retryable());
+    }
+
+    #[test]
+    fn retry_after_hanya_dipakai_bila_wajar() {
+        assert_eq!(
+            ImageError::RateLimited(Some(5)).retry_after(),
+            Some(StdDuration::from_secs(5))
+        );
+        assert_eq!(ImageError::RateLimited(Some(30)).retry_after(), None);
+        assert_eq!(ImageError::RateLimited(None).retry_after(), None);
+        assert_eq!(ImageError::Timeout.retry_after(), None);
+    }
 }

@@ -35,7 +35,10 @@ pub fn commands() -> Vec<poise::Command<Data, Error>> {
 }
 
 fn mod_embed(title: &str, desc: impl Into<String>, color: u32) -> CreateEmbed {
-    CreateEmbed::new().title(title).description(desc).color(color)
+    CreateEmbed::new()
+        .title(title)
+        .description(desc)
+        .color(color)
 }
 
 fn failed(message: impl Into<String>) -> CreateEmbed {
@@ -178,7 +181,9 @@ pub async fn ban(
     on_error = "mod_error"
 )]
 pub async fn unban(ctx: Context<'_>, user_id: u64) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
+    let guild_id = ctx
+        .guild_id()
+        .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
 
     let fetched = ctx.http().get_user(UserId::new(user_id)).await;
     match fetched {
@@ -285,9 +290,10 @@ pub async fn timeout(
 
     let durasi = durasi.unwrap_or(10);
     if !(1..=40_320).contains(&durasi) {
-        ctx.send(poise::CreateReply::default().embed(failed(
-            "Durasi harus antara 1–40320 menit (maks 28 hari).",
-        )))
+        ctx.send(
+            poise::CreateReply::default()
+                .embed(failed("Durasi harus antara 1–40320 menit (maks 28 hari).")),
+        )
         .await?;
         return Ok(());
     }
@@ -369,16 +375,10 @@ pub async fn untimeout(ctx: Context<'_>, member: Member) -> Result<(), Error> {
     required_permissions = "MANAGE_MESSAGES",
     on_error = "mod_error"
 )]
-pub async fn purge(
-    ctx: Context<'_>,
-    jumlah: i64,
-    member: Option<Member>,
-) -> Result<(), Error> {
+pub async fn purge(ctx: Context<'_>, jumlah: i64, member: Option<Member>) -> Result<(), Error> {
     if !(1..=100).contains(&jumlah) {
-        ctx.send(poise::CreateReply::default().embed(failed(
-            "Jumlah pesan harus antara 1–100.",
-        )))
-        .await?;
+        ctx.send(poise::CreateReply::default().embed(failed("Jumlah pesan harus antara 1–100.")))
+            .await?;
         return Ok(());
     }
 
@@ -407,18 +407,13 @@ pub async fn purge(
 
         history
             .iter()
-            .filter(|message| {
-                message.author.id == member.user.id && *message.timestamp > cutoff
-            })
+            .filter(|message| message.author.id == member.user.id && *message.timestamp > cutoff)
             .take(jumlah as usize)
             .map(|message| message.id)
             .collect()
     } else {
         let history = channel_id
-            .messages(
-                ctx.http(),
-                GetMessages::new().limit(jumlah as u8),
-            )
+            .messages(ctx.http(), GetMessages::new().limit(jumlah as u8))
             .await
             .unwrap_or_default();
 
@@ -471,7 +466,9 @@ pub async fn warn_member(
     }
 
     let reason = reason.unwrap_or_else(|| "Tidak ada alasan".to_string());
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
+    let guild_id = ctx
+        .guild_id()
+        .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
     let key = (guild_id, member.user.id);
 
     let count = {
@@ -525,7 +522,9 @@ pub type Warnings = Arc<Mutex<HashMap<(GuildId, UserId), Vec<WarnEntry>>>>;
     on_error = "mod_error"
 )]
 pub async fn warnings(ctx: Context<'_>, member: Member) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
+    let guild_id = ctx
+        .guild_id()
+        .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
     let entries = {
         let guard = ctx
             .data()
@@ -573,7 +572,9 @@ pub async fn warnings(ctx: Context<'_>, member: Member) -> Result<(), Error> {
     on_error = "mod_error"
 )]
 pub async fn clearwarns(ctx: Context<'_>, member: Member) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
+    let guild_id = ctx
+        .guild_id()
+        .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
     {
         let mut guard = ctx
             .data()
@@ -608,9 +609,9 @@ pub async fn clearwarns(ctx: Context<'_>, member: Member) -> Result<(), Error> {
 )]
 pub async fn slowmode(ctx: Context<'_>, detik: i64) -> Result<(), Error> {
     if !(0..=21_600).contains(&detik) {
-        ctx.send(poise::CreateReply::default().embed(failed(
-            "Slowmode harus antara 0–21600 detik.",
-        )))
+        ctx.send(
+            poise::CreateReply::default().embed(failed("Slowmode harus antara 0–21600 detik.")),
+        )
         .await?;
         return Ok(());
     }
@@ -765,7 +766,9 @@ pub async fn mute(
     }
 
     let reason = reason.unwrap_or_else(|| "Tidak ada alasan".to_string());
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
+    let guild_id = ctx
+        .guild_id()
+        .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
 
     let existing = ctx
         .serenity_context()
@@ -791,10 +794,10 @@ pub async fn mute(
                 )
                 .await?;
 
-            ctx.send(poise::CreateReply::default().embed(warn(
-                "Menyiapkan role Muted, tunggu sebentar ya",
-                None,
-            )))
+            ctx.send(
+                poise::CreateReply::default()
+                    .embed(warn("Menyiapkan role Muted, tunggu sebentar ya", None)),
+            )
             .await?;
 
             let channels: Vec<ChannelId> = ctx
@@ -854,7 +857,9 @@ pub async fn mute(
     on_error = "mod_error"
 )]
 pub async fn unmute(ctx: Context<'_>, member: Member) -> Result<(), Error> {
-    let guild_id = ctx.guild_id().ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
+    let guild_id = ctx
+        .guild_id()
+        .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
 
     let muted_role = ctx
         .serenity_context()
@@ -883,9 +888,9 @@ pub async fn unmute(ctx: Context<'_>, member: Member) -> Result<(), Error> {
             ctx.send(poise::CreateReply::default().embed(embed)).await?;
         }
         _ => {
-            ctx.send(poise::CreateReply::default().embed(failed(
-                "Pengguna ini tidak sedang dimute.",
-            )))
+            ctx.send(
+                poise::CreateReply::default().embed(failed("Pengguna ini tidak sedang dimute.")),
+            )
             .await?;
         }
     }
@@ -915,7 +920,7 @@ fn missing_param_error(ctx: &Context<'_>) -> String {
 
 async fn mod_reply(ctx: Context<'_>, embed: CreateEmbed) {
     if let Err(error) = ctx.send(poise::CreateReply::default().embed(embed)).await {
-        println!("[Mod] Gagal mengirim pesan: {error}");
+        tracing::error!(error = %error, "gagal mengirim pesan moderasi");
     }
 }
 
@@ -1005,7 +1010,7 @@ async fn mod_error(error: poise::FrameworkError<'_, Data, Error>) {
                     return;
                 }
             }
-            println!("[Mod] Error: {error}");
+            tracing::error!(error = %error, "command moderasi gagal");
             mod_reply(
                 ctx,
                 mod_embed(
@@ -1017,7 +1022,7 @@ async fn mod_error(error: poise::FrameworkError<'_, Data, Error>) {
             .await;
         }
         other => {
-            println!("[Mod] Error: {other}");
+            tracing::error!(error = %other, "framework error lain");
         }
     }
 }
