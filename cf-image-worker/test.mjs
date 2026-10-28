@@ -271,6 +271,157 @@ const cases = [
     },
   ],
   [
+    "verification punctuation does not trigger a retry",
+    async () => {
+      let fluxCalls = 0;
+      const env = mockEnv(async (model) => {
+        if (model === TEXT_MODEL) {
+          return {
+            response: JSON.stringify({ prompt: "Driver", subjects: ["driver"] }),
+          };
+        }
+        if (model === FLUX_ID) {
+          fluxCalls += 1;
+          return { image: encodedJpeg };
+        }
+        if (model === VISION_MODEL) return { description: "MISSING: none." };
+        throw new Error(`Unexpected model: ${model}`);
+      });
+      const response = await worker.fetch(
+        request("/", {
+          headers: { Authorization: AUTH },
+          body: JSON.stringify({ prompt: "driver" }),
+        }),
+        env,
+      );
+      await expectStatus(response, 200);
+      if (fluxCalls !== 1 || response.headers.get("X-Verified") !== "pass") {
+        throw new Error(
+          `Trailing punctuation was read as a missing subject (fluxCalls=${fluxCalls}, verified=${response.headers.get("X-Verified")})`,
+        );
+      }
+    },
+  ],
+  [
+    "retry prompt leads with the missing subject",
+    async () => {
+      const fluxPrompts = [];
+      let visionCalls = 0;
+      const env = mockEnv(async (model, input) => {
+        if (model === TEXT_MODEL) {
+          return {
+            response: JSON.stringify({
+              prompt: "A driver in a blue car",
+              subjects: ["driver"],
+            }),
+          };
+        }
+        if (model === FLUX_ID) {
+          fluxPrompts.push(input.prompt);
+          return { image: encodedJpeg };
+        }
+        if (model === VISION_MODEL) {
+          visionCalls += 1;
+          return {
+            description: visionCalls === 1 ? "MISSING: driver" : "MISSING: none",
+          };
+        }
+        throw new Error(`Unexpected model: ${model}`);
+      });
+      await worker.fetch(
+        request("/", {
+          headers: { Authorization: AUTH },
+          body: JSON.stringify({ prompt: "driver" }),
+        }),
+        env,
+      );
+      if (fluxPrompts.length !== 2) {
+        throw new Error(`Expected 2 Flux calls, got ${fluxPrompts.length}`);
+      }
+      if (!fluxPrompts[1].startsWith("driver clearly visible in frame, ")) {
+        throw new Error(`Retry prompt did not lead with the subject: ${fluxPrompts[1]}`);
+      }
+    },
+  ],
+  [
+    "plan without subjects still improves the prompt",
+    async () => {
+      let fluxPrompt = "";
+      const env = mockEnv(async (model, input) => {
+        if (model === TEXT_MODEL) {
+          return { response: JSON.stringify({ prompt: "A red car at night" }) };
+        }
+        if (model === FLUX_ID) {
+          fluxPrompt = input.prompt;
+          return { image: encodedJpeg };
+        }
+        throw new Error(`Unexpected model: ${model}`);
+      });
+      const response = await worker.fetch(
+        request("/", {
+          headers: { Authorization: AUTH },
+          body: JSON.stringify({ prompt: "car" }),
+        }),
+        env,
+      );
+      await expectStatus(response, 200);
+      if (fluxPrompt !== "A red car at night") {
+        throw new Error(`Planner prompt was discarded: ${fluxPrompt}`);
+      }
+      if (response.headers.get("X-Verified") !== "skipped") {
+        throw new Error("Verification should be skipped without subjects");
+      }
+    },
+  ],
+  [
+    "long plan prompt is trimmed at a word boundary",
+    async () => {
+      const words = Array.from({ length: 100 }, (_, index) => `word${index}`);
+      let fluxPrompt = "";
+      const env = mockEnv(async (model, input) => {
+        if (model === TEXT_MODEL) {
+          return {
+            response: JSON.stringify({ prompt: words.join(" "), subjects: [] }),
+          };
+        }
+        if (model === FLUX_ID) {
+          fluxPrompt = input.prompt;
+          return { image: encodedJpeg };
+        }
+        throw new Error(`Unexpected model: ${model}`);
+      });
+      await worker.fetch(
+        request("/", {
+          headers: { Authorization: AUTH },
+          body: JSON.stringify({ prompt: "words" }),
+        }),
+        env,
+      );
+      const count = fluxPrompt.split(/\s+/).length;
+      if (count !== 60 || !fluxPrompt.endsWith("word59")) {
+        throw new Error(`Prompt was not trimmed cleanly (${count} words): ${fluxPrompt}`);
+      }
+    },
+  ],
+  [
+    "oversized request bodies are rejected",
+    async () => {
+      const env = mockEnv(async () => ({ image: encodedJpeg }));
+      const response = await worker.fetch(
+        request("/", {
+          headers: { Authorization: AUTH, "content-length": "5000" },
+          body: JSON.stringify({ prompt: "x".repeat(5000) }),
+        }),
+        env,
+      );
+      await expectStatus(response, 413);
+      const body = await jsonBody(response);
+      if (body.error !== "Request body too large") {
+        throw new Error(`Unexpected error body: ${JSON.stringify(body)}`);
+      }
+    },
+  ],
+  [
     "anime style reaches Flux",
     async () => {
       let fluxPrompt = "";
