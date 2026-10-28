@@ -1128,7 +1128,7 @@ async fn join_author_channel(ctx: Context<'_>) -> Option<Arc<Mutex<Call>>> {
 // ────────────────────────────────────────────────────────────
 
 /// Bot masuk ke voice channel kamu
-#[poise::command(prefix_command, rename = "join", guild_only)]
+#[poise::command(prefix_command, slash_command, rename = "join", guild_only)]
 pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
@@ -1202,8 +1202,13 @@ pub async fn join(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Putar lagu / playlist dari YouTube, Spotify, SoundCloud, atau cari berdasarkan judul
-#[poise::command(prefix_command, rename = "play", guild_only)]
-pub async fn play(ctx: Context<'_>, #[rest] search: String) -> Result<(), Error> {
+#[poise::command(prefix_command, slash_command, rename = "play", guild_only)]
+pub async fn play(
+    ctx: Context<'_>,
+    #[description = "Judul lagu atau URL"]
+    #[rest]
+    search: String,
+) -> Result<(), Error> {
     let Some(call) = join_author_channel(ctx).await else {
         return Ok(());
     };
@@ -1514,7 +1519,7 @@ async fn handle_single(
 }
 
 /// Pause lagu yang sedang diputar
-#[poise::command(prefix_command, rename = "pause", guild_only)]
+#[poise::command(prefix_command, slash_command, rename = "pause", guild_only)]
 pub async fn pause(ctx: Context<'_>) -> Result<(), Error> {
     if !same_voice(ctx).await {
         return Ok(());
@@ -1545,7 +1550,7 @@ pub async fn pause(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Lanjutkan lagu yang dijeda
-#[poise::command(prefix_command, rename = "resume", guild_only)]
+#[poise::command(prefix_command, slash_command, rename = "resume", guild_only)]
 pub async fn resume(ctx: Context<'_>) -> Result<(), Error> {
     if !same_voice(ctx).await {
         return Ok(());
@@ -1581,7 +1586,7 @@ pub async fn resume(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Lewati lagu yang sedang diputar
-#[poise::command(prefix_command, rename = "skip", guild_only)]
+#[poise::command(prefix_command, slash_command, rename = "skip", guild_only)]
 pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
     if !same_voice(ctx).await {
         return Ok(());
@@ -1607,7 +1612,7 @@ pub async fn skip(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Stop dan bot keluar dari voice channel
-#[poise::command(prefix_command, rename = "stop", guild_only)]
+#[poise::command(prefix_command, slash_command, rename = "stop", guild_only)]
 pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
@@ -1638,7 +1643,7 @@ pub async fn stop(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Tampilkan antrian lagu saat ini
-#[poise::command(prefix_command, rename = "queue", guild_only)]
+#[poise::command(prefix_command, slash_command, rename = "queue", guild_only)]
 pub async fn queue(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
@@ -1696,7 +1701,13 @@ pub async fn queue(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Tampilkan lagu yang sedang diputar
-#[poise::command(prefix_command, rename = "nowplaying", aliases("np"), guild_only)]
+#[poise::command(
+    prefix_command,
+    slash_command,
+    rename = "nowplaying",
+    aliases("np"),
+    guild_only
+)]
 pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
@@ -1729,7 +1740,13 @@ pub async fn nowplaying(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Tampilkan history lagu yang sudah diputar
-#[poise::command(prefix_command, rename = "playinghistory", aliases("ph"), guild_only)]
+#[poise::command(
+    prefix_command,
+    slash_command,
+    rename = "playinghistory",
+    aliases("ph"),
+    guild_only
+)]
 pub async fn playing_history(ctx: Context<'_>) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
@@ -1773,8 +1790,11 @@ pub async fn playing_history(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Atur volume (0-100)
-#[poise::command(prefix_command, rename = "volume", guild_only)]
-pub async fn volume(ctx: Context<'_>, vol: i64) -> Result<(), Error> {
+#[poise::command(prefix_command, slash_command, rename = "volume", guild_only)]
+pub async fn volume(
+    ctx: Context<'_>,
+    #[description = "Volume 0-100"] vol: i64,
+) -> Result<(), Error> {
     if !same_voice(ctx).await {
         return Ok(());
     }
@@ -1806,7 +1826,13 @@ pub async fn volume(ctx: Context<'_>, vol: i64) -> Result<(), Error> {
 }
 
 /// Hapus semua lagu dalam antrian
-#[poise::command(prefix_command, rename = "clearqueue", aliases("cq"), guild_only)]
+#[poise::command(
+    prefix_command,
+    slash_command,
+    rename = "clearqueue",
+    aliases("cq"),
+    guild_only
+)]
 pub async fn clearqueue(ctx: Context<'_>) -> Result<(), Error> {
     if !same_voice(ctx).await {
         return Ok(());
@@ -1826,8 +1852,11 @@ pub async fn clearqueue(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Hapus lagu tertentu dari antrian berdasarkan nomor
-#[poise::command(prefix_command, rename = "remove", guild_only)]
-pub async fn remove(ctx: Context<'_>, index: i64) -> Result<(), Error> {
+#[poise::command(prefix_command, slash_command, rename = "remove", guild_only)]
+pub async fn remove(
+    ctx: Context<'_>,
+    #[description = "Nomor lagu di antrian"] index: i64,
+) -> Result<(), Error> {
     if !same_voice(ctx).await {
         return Ok(());
     }

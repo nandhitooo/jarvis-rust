@@ -131,6 +131,7 @@ fn is_status(error: &serenity::Error, status: u16) -> bool {
 /// Ban user dari server
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "ban",
     guild_only,
     required_permissions = "BAN_MEMBERS",
@@ -138,8 +139,10 @@ fn is_status(error: &serenity::Error, status: u16) -> bool {
 )]
 pub async fn ban(
     ctx: Context<'_>,
-    member: Member,
-    #[rest] reason: Option<String>,
+    #[description = "Anggota yang dibanned"] member: Member,
+    #[description = "Alasan ban (opsional)"]
+    #[rest]
+    reason: Option<String>,
 ) -> Result<(), Error> {
     if let Err(message) = can_moderate(&ctx, &member).await {
         ctx.send(poise::CreateReply::default().embed(failed(message)))
@@ -175,12 +178,16 @@ pub async fn ban(
 /// Unban user dari server
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "unban",
     guild_only,
     required_permissions = "BAN_MEMBERS",
     on_error = "mod_error"
 )]
-pub async fn unban(ctx: Context<'_>, user_id: u64) -> Result<(), Error> {
+pub async fn unban(
+    ctx: Context<'_>,
+    #[description = "ID pengguna yang diunban"] user_id: u64,
+) -> Result<(), Error> {
     let guild_id = ctx
         .guild_id()
         .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
@@ -224,6 +231,7 @@ pub async fn unban(ctx: Context<'_>, user_id: u64) -> Result<(), Error> {
 /// Kick user dari server
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "kick",
     guild_only,
     required_permissions = "KICK_MEMBERS",
@@ -231,8 +239,10 @@ pub async fn unban(ctx: Context<'_>, user_id: u64) -> Result<(), Error> {
 )]
 pub async fn kick(
     ctx: Context<'_>,
-    member: Member,
-    #[rest] reason: Option<String>,
+    #[description = "Anggota yang dikick"] member: Member,
+    #[description = "Alasan kick (opsional)"]
+    #[rest]
+    reason: Option<String>,
 ) -> Result<(), Error> {
     if let Err(message) = can_moderate(&ctx, &member).await {
         ctx.send(poise::CreateReply::default().embed(failed(message)))
@@ -271,6 +281,7 @@ pub async fn kick(
 /// Timeout user (menit). Contoh: !jarvis timeout @user 10 spam
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "timeout",
     guild_only,
     required_permissions = "MODERATE_MEMBERS",
@@ -278,9 +289,11 @@ pub async fn kick(
 )]
 pub async fn timeout(
     ctx: Context<'_>,
-    member: Member,
-    durasi: Option<i64>,
-    #[rest] reason: Option<String>,
+    #[description = "Anggota yang di-timeout"] member: Member,
+    #[description = "Durasi timeout dalam menit (default 10)"] durasi: Option<i64>,
+    #[description = "Alasan timeout (opsional)"]
+    #[rest]
+    reason: Option<String>,
 ) -> Result<(), Error> {
     if let Err(message) = can_moderate(&ctx, &member).await {
         ctx.send(poise::CreateReply::default().embed(failed(message)))
@@ -333,12 +346,16 @@ pub async fn timeout(
 /// Hapus timeout user
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "untimeout",
     guild_only,
     required_permissions = "MODERATE_MEMBERS",
     on_error = "mod_error"
 )]
-pub async fn untimeout(ctx: Context<'_>, member: Member) -> Result<(), Error> {
+pub async fn untimeout(
+    ctx: Context<'_>,
+    #[description = "Anggota yang timeout-nya dihapus"] member: Member,
+) -> Result<(), Error> {
     ctx.guild_id()
         .ok_or_else(|| anyhow::anyhow!("bukan guild"))?
         .edit_member(
@@ -369,39 +386,44 @@ pub async fn untimeout(ctx: Context<'_>, member: Member) -> Result<(), Error> {
 /// Hapus pesan. Contoh: !jarvis purge 10
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "purge",
     aliases("clear"),
     guild_only,
     required_permissions = "MANAGE_MESSAGES",
     on_error = "mod_error"
 )]
-pub async fn purge(ctx: Context<'_>, jumlah: i64, member: Option<Member>) -> Result<(), Error> {
+pub async fn purge(
+    ctx: Context<'_>,
+    #[description = "Jumlah pesan yang dihapus (1-100)"] jumlah: i64,
+    #[description = "Hanya hapus pesan dari anggota ini (opsional)"] member: Option<Member>,
+) -> Result<(), Error> {
     if !(1..=100).contains(&jumlah) {
         ctx.send(poise::CreateReply::default().embed(failed("Jumlah pesan harus antara 1–100.")))
             .await?;
         return Ok(());
     }
 
-    let Some(invocation) = (match ctx {
+    // Pada slash command tidak ada pesan pemanggil yang perlu dihapus.
+    let invocation = match ctx {
         poise::Context::Prefix(prefix) => Some(prefix.msg.clone()),
         _ => None,
-    }) else {
-        return Ok(());
     };
 
     let channel_id = ctx.channel_id();
-    let _ = channel_id.delete_message(ctx.http(), invocation.id).await;
+    if let Some(invocation) = &invocation {
+        let _ = channel_id.delete_message(ctx.http(), invocation.id).await;
+    }
 
     let cutoff = Utc::now() - Duration::days(14);
 
     let to_delete: Vec<MessageId> = if let Some(member) = member {
+        let mut request = GetMessages::new().limit((jumlah * 10).min(100) as u8);
+        if let Some(invocation) = &invocation {
+            request = request.before(invocation.id);
+        }
         let history = channel_id
-            .messages(
-                ctx.http(),
-                GetMessages::new()
-                    .limit((jumlah * 10).min(100) as u8)
-                    .before(invocation.id),
-            )
+            .messages(ctx.http(), request)
             .await
             .unwrap_or_default();
 
@@ -449,6 +471,7 @@ pub async fn purge(ctx: Context<'_>, jumlah: i64, member: Option<Member>) -> Res
 /// Beri peringatan ke user
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "warn",
     guild_only,
     required_permissions = "KICK_MEMBERS",
@@ -456,8 +479,10 @@ pub async fn purge(ctx: Context<'_>, jumlah: i64, member: Option<Member>) -> Res
 )]
 pub async fn warn_member(
     ctx: Context<'_>,
-    member: Member,
-    #[rest] reason: Option<String>,
+    #[description = "Anggota yang diberi peringatan"] member: Member,
+    #[description = "Alasan peringatan (opsional)"]
+    #[rest]
+    reason: Option<String>,
 ) -> Result<(), Error> {
     if let Err(message) = can_moderate(&ctx, &member).await {
         ctx.send(poise::CreateReply::default().embed(failed(message)))
@@ -515,13 +540,17 @@ pub type Warnings = Arc<Mutex<HashMap<(GuildId, UserId), Vec<WarnEntry>>>>;
 /// Lihat daftar warning user
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "warnings",
     aliases("warnlist"),
     guild_only,
     required_permissions = "KICK_MEMBERS",
     on_error = "mod_error"
 )]
-pub async fn warnings(ctx: Context<'_>, member: Member) -> Result<(), Error> {
+pub async fn warnings(
+    ctx: Context<'_>,
+    #[description = "Anggota yang peringatannya dilihat"] member: Member,
+) -> Result<(), Error> {
     let guild_id = ctx
         .guild_id()
         .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
@@ -566,12 +595,16 @@ pub async fn warnings(ctx: Context<'_>, member: Member) -> Result<(), Error> {
 /// Hapus semua warning user
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "clearwarns",
     guild_only,
     required_permissions = "ADMINISTRATOR",
     on_error = "mod_error"
 )]
-pub async fn clearwarns(ctx: Context<'_>, member: Member) -> Result<(), Error> {
+pub async fn clearwarns(
+    ctx: Context<'_>,
+    #[description = "Anggota yang peringatannya dihapus"] member: Member,
+) -> Result<(), Error> {
     let guild_id = ctx
         .guild_id()
         .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;
@@ -602,12 +635,16 @@ pub async fn clearwarns(ctx: Context<'_>, member: Member) -> Result<(), Error> {
 /// Set slowmode channel (detik). 0 untuk matikan.
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "slowmode",
     guild_only,
     required_permissions = "MANAGE_CHANNELS",
     on_error = "mod_error"
 )]
-pub async fn slowmode(ctx: Context<'_>, detik: i64) -> Result<(), Error> {
+pub async fn slowmode(
+    ctx: Context<'_>,
+    #[description = "Detik slowmode, 0 untuk mematikan"] detik: i64,
+) -> Result<(), Error> {
     if !(0..=21_600).contains(&detik) {
         ctx.send(
             poise::CreateReply::default().embed(failed("Slowmode harus antara 0–21600 detik.")),
@@ -691,6 +728,7 @@ fn overwrites_with_send_messages(
 /// Kunci channel agar member tidak bisa mengirim pesan
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "lock",
     guild_only,
     required_permissions = "MANAGE_CHANNELS",
@@ -718,6 +756,7 @@ pub async fn lock(ctx: Context<'_>) -> Result<(), Error> {
 /// Buka kunci channel
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "unlock",
     guild_only,
     required_permissions = "MANAGE_CHANNELS",
@@ -749,6 +788,7 @@ pub async fn unlock(ctx: Context<'_>) -> Result<(), Error> {
 /// Mute user
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "mute",
     guild_only,
     required_permissions = "MANAGE_ROLES",
@@ -756,8 +796,10 @@ pub async fn unlock(ctx: Context<'_>) -> Result<(), Error> {
 )]
 pub async fn mute(
     ctx: Context<'_>,
-    member: Member,
-    #[rest] reason: Option<String>,
+    #[description = "Anggota yang dimute"] member: Member,
+    #[description = "Alasan mute (opsional)"]
+    #[rest]
+    reason: Option<String>,
 ) -> Result<(), Error> {
     if let Err(message) = can_moderate(&ctx, &member).await {
         ctx.send(poise::CreateReply::default().embed(failed(message)))
@@ -851,12 +893,16 @@ pub async fn mute(
 /// Unmute user
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "unmute",
     guild_only,
     required_permissions = "MANAGE_ROLES",
     on_error = "mod_error"
 )]
-pub async fn unmute(ctx: Context<'_>, member: Member) -> Result<(), Error> {
+pub async fn unmute(
+    ctx: Context<'_>,
+    #[description = "Anggota yang diunmute"] member: Member,
+) -> Result<(), Error> {
     let guild_id = ctx
         .guild_id()
         .ok_or_else(|| anyhow::anyhow!("bukan guild"))?;

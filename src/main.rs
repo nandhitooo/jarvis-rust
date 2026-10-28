@@ -20,7 +20,7 @@ use songbird::SerenityInit;
 
 use cogs::{ai, assistant, moderation, music, utility};
 use config::{COGS, HONORIFIC};
-use helpers::{err, warn, COLOR_INFO};
+use helpers::{err, info, warn, COLOR_INFO};
 
 /// Tipe error yang dipakai seluruh perintah.
 pub type Error = anyhow::Error;
@@ -219,6 +219,37 @@ fn category_embed(
     }
 }
 
+/// Menandai menu sebagai milik `author_id` lalu menonaktifkan komponennya setelah 60 detik.
+fn track_help_menu(
+    serenity_ctx: &serenity::Context,
+    data: &Data,
+    channel_id: ChannelId,
+    message_id: MessageId,
+    author_id: UserId,
+) {
+    let menus = data.help_menus.clone();
+    {
+        let mut guard = menus.lock().unwrap_or_else(|error| error.into_inner());
+        guard.insert(message_id, author_id);
+    }
+
+    let serenity_ctx = serenity_ctx.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        {
+            let mut guard = menus.lock().unwrap_or_else(|error| error.into_inner());
+            guard.remove(&message_id);
+        }
+        let _ = channel_id
+            .edit_message(
+                &serenity_ctx,
+                message_id,
+                EditMessage::new().components(help_components(true)),
+            )
+            .await;
+    });
+}
+
 /// Mengirim menu bantuan lalu menjadwalkan penonaktifan komponen setelah 60 detik.
 async fn send_help_message(
     serenity_ctx: &serenity::Context,
@@ -240,28 +271,7 @@ async fn send_help_message(
         )
         .await?;
 
-    let menus = data.help_menus.clone();
-    {
-        let mut guard = menus.lock().unwrap_or_else(|error| error.into_inner());
-        guard.insert(message.id, author_id);
-    }
-
-    let message_id = message.id;
-    let serenity_ctx = serenity_ctx.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-        {
-            let mut guard = menus.lock().unwrap_or_else(|error| error.into_inner());
-            guard.remove(&message_id);
-        }
-        let _ = channel_id
-            .edit_message(
-                &serenity_ctx,
-                message_id,
-                EditMessage::new().components(help_components(true)),
-            )
-            .await;
-    });
+    track_help_menu(serenity_ctx, data, channel_id, message.id, author_id);
 
     Ok(())
 }
@@ -279,15 +289,36 @@ pub async fn send_help_menu(ctx: &Context<'_>) -> Result<(), Error> {
         .map(|member| member.face())
         .unwrap_or_else(|| author.face());
 
-    send_help_message(
+    let bot_avatar = ctx.serenity_context().cache.current_user().face();
+    let embed = main_embed(&author_name, &author_avatar, &bot_avatar);
+
+    // `ctx.send` menangani dua mode sekaligus: pesan biasa untuk prefix dan
+    // respons interaksi untuk slash command.
+    let reply = ctx
+        .send(
+            poise::CreateReply::default()
+                .embed(embed)
+                .components(help_components(false)),
+        )
+        .await?;
+
+    let message_id = match reply.message().await {
+        Ok(message) => message.id,
+        Err(error) => {
+            tracing::warn!(error = %error, "gagal mengambil pesan menu bantuan");
+            return Ok(());
+        }
+    };
+
+    track_help_menu(
         ctx.serenity_context(),
         ctx.data(),
         ctx.channel_id(),
+        message_id,
         author.id,
-        &author_name,
-        &author_avatar,
-    )
-    .await
+    );
+
+    Ok(())
 }
 
 /// Kirim menu bantuan dari sebuah pesan (dipakai saat prefix dipakai tanpa sub-command).
@@ -392,6 +423,165 @@ async fn handle_component(
 }
 
 // ────────────────────────────────────────────────────────────
+// Saran perintah (saat pengguna salah ketik nama perintah)
+// ────────────────────────────────────────────────────────────
+
+/// Batas minimal kemiripan supaya sebuah perintah layak disarankan.
+const MIN_SIMILARITY: f64 = 0.5;
+/// Jumlah saran yang ditampilkan sekaligus.
+const MAX_SUGGESTIONS: usize = 5;
+
+/// Ringkasan satu perintah: nama, alias, dan deskripsi singkatnya.
+struct CommandSummary {
+    name: String,
+    aliases: Vec<String>,
+    description: Option<String>,
+}
+
+/// Jarak edit Levenshtein (jumlah sisip, hapus, atau ganti karakter).
+fn levenshtein(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0usize; right.len() + 1];
+
+    for (i, left_char) in left.iter().enumerate() {
+        current[0] = i + 1;
+        for (j, right_char) in right.iter().enumerate() {
+            let substitution = previous[j] + usize::from(left_char != right_char);
+            current[j + 1] = substitution.min(previous[j + 1] + 1).min(current[j] + 1);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right.len()]
+}
+
+/// Skor kemiripan 0.0-1.0 antara teks yang diketik dan nama perintah.
+fn similarity(typed: &str, candidate: &str) -> f64 {
+    if typed.is_empty() || candidate.is_empty() {
+        return 0.0;
+    }
+    if typed == candidate {
+        return 1.0;
+    }
+    if candidate.starts_with(typed) {
+        return 0.95;
+    }
+    if candidate.contains(typed) {
+        return 0.8;
+    }
+
+    let longest = typed.chars().count().max(candidate.chars().count()) as f64;
+    (1.0 - levenshtein(typed, candidate) as f64 / longest).max(0.0)
+}
+
+/// Kata pertama setelah prefix pada isi pesan (`!j play x` -> `play`).
+fn typed_command(content: &str) -> &str {
+    let trimmed = content.trim();
+    let rest = ["!jarvis", "!j"]
+        .iter()
+        .find(|prefix| {
+            trimmed
+                .get(..prefix.len())
+                .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        })
+        .map(|prefix| &trimmed[prefix.len()..])
+        .unwrap_or(trimmed);
+
+    rest.split_whitespace().next().unwrap_or("")
+}
+
+/// Perintah yang paling mirip dengan yang diketik, urut dari yang terdekat.
+fn suggest_commands<'a>(
+    candidates: &'a [CommandSummary],
+    typed: &str,
+    limit: usize,
+) -> Vec<&'a CommandSummary> {
+    if typed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut scored: Vec<(&CommandSummary, f64)> = candidates
+        .iter()
+        .filter_map(|candidate| {
+            let score = std::iter::once(&candidate.name)
+                .chain(candidate.aliases.iter())
+                .map(|word| similarity(typed, word))
+                .fold(0.0_f64, f64::max);
+            (score >= MIN_SIMILARITY).then_some((candidate, score))
+        })
+        .collect();
+
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .partial_cmp(&left.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.name.cmp(&right.0.name))
+    });
+    scored.truncate(limit);
+
+    scored.into_iter().map(|(candidate, _)| candidate).collect()
+}
+
+/// Salinan ringkas seluruh perintah yang terdaftar di framework.
+fn command_summaries(framework: &poise::FrameworkContext<'_, Data, Error>) -> Vec<CommandSummary> {
+    framework
+        .options
+        .commands
+        .iter()
+        .map(|command| CommandSummary {
+            name: command.name.clone(),
+            aliases: command.aliases.clone(),
+            description: command.description.clone(),
+        })
+        .collect()
+}
+
+/// Judul dan isi pesan saran; dipisah dari embed supaya bisa diuji langsung.
+fn suggestion_text(typed: &str, suggestions: &[&CommandSummary]) -> (String, String) {
+    if suggestions.is_empty() {
+        return (
+            "❌ Perintah Tidak Dikenal".to_string(),
+            format!(
+                "Perintah **`{typed}`** tidak saya kenal. Ketik `!jarvis` untuk lihat daftar perintah."
+            ),
+        );
+    }
+
+    let mut lines = String::new();
+    for suggestion in suggestions {
+        let description = suggestion
+            .description
+            .as_deref()
+            .and_then(|text| text.lines().next())
+            .unwrap_or("")
+            .trim();
+        if description.is_empty() {
+            lines.push_str(&format!("`!j {}`\n", suggestion.name));
+        } else {
+            lines.push_str(&format!("`!j {}` — {description}\n", suggestion.name));
+        }
+    }
+
+    (
+        "🔎 Mungkin Maksudmu".to_string(),
+        format!("Perintah **`{typed}`** tidak ada. Mungkin maksud kamu:\n\n{lines}"),
+    )
+}
+
+/// Embed berisi saran perintah, atau pesan "tidak dikenal" kalau tidak ada yang mirip.
+fn suggestion_embed(typed: &str, suggestions: &[&CommandSummary]) -> CreateEmbed {
+    let (title, text) = suggestion_text(typed, suggestions);
+    if suggestions.is_empty() {
+        err(text, Some(&title))
+    } else {
+        info(text, Some(&title))
+    }
+}
+
+// ────────────────────────────────────────────────────────────
 // Global error handler
 // ────────────────────────────────────────────────────────────
 
@@ -431,8 +621,35 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
                 if let Err(error) = send_help_from_message(ctx, framework.user_data, msg).await {
                     tracing::error!(error = %error, "gagal mengirim menu bantuan");
                 }
+                return;
             }
-            // Perintah yang tidak dikenal diabaikan.
+
+            // Salah ketik nama perintah: tawarkan perintah yang paling mirip.
+            let typed = typed_command(&msg.content);
+            if typed.is_empty() {
+                return;
+            }
+
+            let summaries = command_summaries(&framework);
+            let suggestions = suggest_commands(&summaries, typed, MAX_SUGGESTIONS);
+            tracing::debug!(
+                typed = %typed,
+                user_id = %msg.author.id,
+                suggestions = suggestions.len(),
+                "perintah tidak dikenal, mengirim saran"
+            );
+
+            let embed = suggestion_embed(typed, &suggestions);
+            if let Err(error) = msg
+                .channel_id
+                .send_message(
+                    ctx,
+                    CreateMessage::new().embed(embed).reference_message(msg),
+                )
+                .await
+            {
+                tracing::error!(error = %error, "gagal mengirim saran perintah");
+            }
         }
         poise::FrameworkError::ArgumentParse {
             error, input, ctx, ..
@@ -610,11 +827,25 @@ async fn main() -> Result<(), Error> {
             },
             ..Default::default()
         })
-        .setup(|ctx, ready, _framework| {
+        .setup(|ctx, ready, framework| {
             Box::pin(async move {
                 for cog in COGS {
                     tracing::info!(cog = %cog.to_lowercase(), "cog dimuat");
                 }
+
+                // Daftarkan seluruh perintah sebagai slash command supaya Discord
+                // menampilkan autocomplete nama perintah di kolom chat.
+                let slash_commands = &framework.options().commands;
+                match poise::builtins::register_globally(ctx, slash_commands).await {
+                    Ok(()) => tracing::info!(
+                        count = slash_commands.len(),
+                        "slash command didaftarkan secara global"
+                    ),
+                    Err(error) => {
+                        tracing::error!(error = %error, "gagal mendaftarkan slash command")
+                    }
+                }
+
                 tracing::info!(user = %ready.user.name, user_id = %ready.user.id, "bot siap");
                 tracing::info!(cogs = %COGS.join(", "), "cog aktif");
 
@@ -660,4 +891,222 @@ async fn main() -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn summary(name: &str, aliases: &[&str], description: &str) -> CommandSummary {
+        CommandSummary {
+            name: name.to_string(),
+            aliases: aliases.iter().map(|alias| alias.to_string()).collect(),
+            description: Some(description.to_string()),
+        }
+    }
+
+    #[test]
+    fn levenshtein_counts_single_edits() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("play", "play"), 0);
+        assert_eq!(levenshtein("play", "paly"), 2);
+        assert_eq!(levenshtein("whois", "whos"), 1);
+    }
+
+    #[test]
+    fn typed_command_strips_both_prefixes() {
+        assert_eq!(typed_command("!j pl"), "pl");
+        assert_eq!(typed_command("!jarvis play lagu"), "play");
+        assert_eq!(typed_command("  !J pause  sekarang "), "pause");
+        assert_eq!(typed_command("!j"), "");
+        assert_eq!(typed_command("日é"), "日é");
+    }
+
+    #[test]
+    fn prefix_match_wins() {
+        let commands = vec![
+            summary("play", &[], "Putar lagu"),
+            summary("pause", &[], "Jeda lagu"),
+            summary("stop", &[], "Berhenti"),
+        ];
+
+        let names: Vec<&str> = suggest_commands(&commands, "pau", 5)
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect();
+
+        // `pause` paling dekat; `stop` terlalu jauh untuk ikut disarankan.
+        assert_eq!(names.first(), Some(&"pause"));
+        assert!(!names.contains(&"stop"));
+    }
+
+    #[test]
+    fn matches_typos_and_aliases() {
+        let commands = vec![
+            summary("userinfo", &["user", "whois"], "Info user"),
+            summary("play", &[], "Putar lagu"),
+        ];
+
+        let typos: Vec<&str> = suggest_commands(&commands, "plaay", 5)
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect();
+        assert_eq!(typos, vec!["play"]);
+
+        let aliases: Vec<&str> = suggest_commands(&commands, "whos", 5)
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect();
+        assert_eq!(aliases, vec!["userinfo"]);
+    }
+
+    #[test]
+    fn unrelated_input_gets_no_suggestion() {
+        let commands = vec![summary("play", &[], "Putar lagu")];
+        assert!(suggest_commands(&commands, "zzzz", 5).is_empty());
+        assert!(suggest_commands(&commands, "", 5).is_empty());
+    }
+
+    #[test]
+    fn suggestions_are_capped_and_sorted() {
+        let commands: Vec<CommandSummary> = (0..8)
+            .map(|index| summary(&format!("play{index}"), &[], "Putar lagu"))
+            .collect();
+
+        let suggestions = suggest_commands(&commands, "play", 5);
+
+        assert_eq!(suggestions.len(), 5);
+        assert_eq!(suggestions[0].name, "play0");
+    }
+
+    #[test]
+    fn real_command_registry_produces_suggestions() {
+        let summaries: Vec<CommandSummary> = command_list()
+            .iter()
+            .map(|command| CommandSummary {
+                name: command.name.clone(),
+                aliases: command.aliases.clone(),
+                description: command.description.clone(),
+            })
+            .collect();
+
+        let names: Vec<&str> = suggest_commands(&summaries, "ply", 5)
+            .iter()
+            .map(|command| command.name.as_str())
+            .collect();
+        assert!(names.contains(&"play"), "saran: {names:?}");
+
+        let alias = suggest_commands(&summaries, "whois", 5);
+        assert!(alias.iter().any(|command| command.name == "userinfo"));
+
+        // Deskripsi dari doc comment harus terisi supaya saran punya keterangan.
+        let play = summaries
+            .iter()
+            .find(|command| command.name == "play")
+            .unwrap();
+        assert!(play
+            .description
+            .as_deref()
+            .is_some_and(|text| !text.is_empty()));
+    }
+
+    #[test]
+    fn suggestion_text_lists_commands_and_falls_back() {
+        let commands = vec![summary("play", &[], "Putar lagu\ncontoh: !j play x")];
+        let suggestions = suggest_commands(&commands, "pla", 5);
+        let (title, text) = suggestion_text("pla", &suggestions);
+        assert_eq!(title, "🔎 Mungkin Maksudmu");
+        assert_eq!(
+            text,
+            "Perintah **`pla`** tidak ada. Mungkin maksud kamu:\n\n`!j play` — Putar lagu\n"
+        );
+
+        let (title, text) = suggestion_text("zzzz", &[]);
+        assert_eq!(title, "❌ Perintah Tidak Dikenal");
+        assert!(text.contains("tidak saya kenal"));
+    }
+}
+
+#[cfg(test)]
+mod slash_commands {
+    use super::*;
+
+    /// Data yang dikirim ke Discord saat mendaftarkan slash command harus sah:
+    /// nama valid, deskripsi terisi, dan opsi wajib berada sebelum opsi opsional.
+    #[test]
+    fn every_command_registers_as_valid_slash_command() {
+        let commands = command_list();
+        assert!(!commands.is_empty());
+
+        let mut names: Vec<String> = Vec::new();
+
+        for command in &commands {
+            let built = command.create_as_slash_command().unwrap_or_else(|| {
+                panic!("`{}` tidak menghasilkan data slash command", command.name)
+            });
+            let json =
+                serde_json::to_value(&built).expect("slash command harus bisa diserialisasi");
+
+            let name = json["name"].as_str().expect("nama slash command");
+            assert!(
+                (1..=32).contains(&name.chars().count())
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'),
+                "nama slash command tidak valid: `{name}`"
+            );
+            assert!(
+                !names.contains(&name.to_string()),
+                "nama duplikat: `{name}`"
+            );
+            names.push(name.to_string());
+
+            let description = json["description"]
+                .as_str()
+                .expect("deskripsi slash command");
+            assert!(
+                !description.trim().is_empty() && description.chars().count() <= 100,
+                "deskripsi `{name}` tidak valid: {description:?}"
+            );
+
+            let options = json["options"].as_array().expect("daftar opsi");
+            assert!(options.len() <= 25, "`{name}` punya terlalu banyak opsi");
+
+            let mut optional_seen = false;
+            for option in options {
+                let option_name = option["name"].as_str().expect("nama opsi");
+                let option_description = option["description"].as_str().expect("deskripsi opsi");
+                assert!(option_name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'));
+                assert_ne!(
+                    option_description, "A slash command parameter",
+                    "opsi `{option_name}` di `{name}` belum punya deskripsi"
+                );
+
+                let required = option["required"].as_bool().unwrap_or(false);
+                assert!(
+                    !(required && optional_seen),
+                    "opsi wajib `{option_name}` di `{name}` berada setelah opsi opsional"
+                );
+                optional_seen |= !required;
+            }
+        }
+    }
+
+    #[test]
+    fn every_command_keeps_prefix_variant() {
+        for command in &command_list() {
+            assert!(
+                command.prefix_action.is_some(),
+                "`{}` kehilangan versi prefix",
+                command.name
+            );
+            assert!(
+                command.slash_action.is_some(),
+                "`{}` tidak punya versi slash",
+                command.name
+            );
+        }
+    }
 }

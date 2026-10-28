@@ -34,7 +34,7 @@ fn footer(ctx: &Context<'_>) -> CreateEmbedFooter {
 }
 
 /// Cek latensi bot
-#[poise::command(prefix_command, rename = "ping")]
+#[poise::command(prefix_command, slash_command, rename = "ping")]
 pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
     let ws_latency = (ctx.ping().await.as_secs_f64() * 1000.0).round() as i64;
 
@@ -67,7 +67,7 @@ pub async fn ping(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Tampilkan cogs yang sedang aktif
-#[poise::command(prefix_command, rename = "cogs")]
+#[poise::command(prefix_command, slash_command, rename = "cogs")]
 pub async fn list_cogs(ctx: Context<'_>) -> Result<(), Error> {
     let loaded = if COGS.is_empty() {
         "Belum ada".to_string()
@@ -86,7 +86,7 @@ pub async fn list_cogs(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Lihat info bot
-#[poise::command(prefix_command, rename = "info")]
+#[poise::command(prefix_command, slash_command, rename = "info")]
 pub async fn info(ctx: Context<'_>) -> Result<(), Error> {
     let bot = ctx.serenity_context().cache.current_user().clone();
 
@@ -115,13 +115,13 @@ pub async fn info(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Tampilkan menu bantuan
-#[poise::command(prefix_command, rename = "help")]
+#[poise::command(prefix_command, slash_command, rename = "help")]
 pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
     crate::send_help_menu(&ctx).await
 }
 
 /// Dapatkan link invite bot
-#[poise::command(prefix_command, rename = "invite")]
+#[poise::command(prefix_command, slash_command, rename = "invite")]
 pub async fn invite(ctx: Context<'_>) -> Result<(), Error> {
     let bot_id = ctx.serenity_context().cache.current_user().id;
 
@@ -158,7 +158,7 @@ pub async fn invite(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Lihat berapa lama bot sudah online
-#[poise::command(prefix_command, rename = "uptime")]
+#[poise::command(prefix_command, slash_command, rename = "uptime")]
 pub async fn uptime(ctx: Context<'_>) -> Result<(), Error> {
     let now = Utc::now();
     let delta = now - ctx.data().start_time;
@@ -202,7 +202,7 @@ pub async fn uptime(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Statistik penggunaan bot
-#[poise::command(prefix_command, rename = "stats")]
+#[poise::command(prefix_command, slash_command, rename = "stats")]
 pub async fn stats(ctx: Context<'_>) -> Result<(), Error> {
     let cache = &ctx.serenity_context().cache;
     let guild_ids = cache.guilds();
@@ -233,8 +233,16 @@ pub async fn stats(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Lihat informasi user
-#[poise::command(prefix_command, rename = "userinfo", aliases("user", "whois"))]
-pub async fn userinfo(ctx: Context<'_>, member: Option<Member>) -> Result<(), Error> {
+#[poise::command(
+    prefix_command,
+    slash_command,
+    rename = "userinfo",
+    aliases("user", "whois")
+)]
+pub async fn userinfo(
+    ctx: Context<'_>,
+    #[description = "Anggota yang ingin dilihat (kosongkan untuk dirimu)"] member: Option<Member>,
+) -> Result<(), Error> {
     let member = match member {
         Some(member) => member,
         None => match ctx.author_member().await {
@@ -320,7 +328,12 @@ pub async fn userinfo(ctx: Context<'_>, member: Option<Member>) -> Result<(), Er
 }
 
 /// Lihat informasi server
-#[poise::command(prefix_command, rename = "serverinfo", aliases("server"))]
+#[poise::command(
+    prefix_command,
+    slash_command,
+    rename = "serverinfo",
+    aliases("server")
+)]
 pub async fn serverinfo(ctx: Context<'_>) -> Result<(), Error> {
     let guild_id = ctx
         .guild_id()

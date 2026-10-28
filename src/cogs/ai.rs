@@ -383,11 +383,17 @@ const NO_BACKEND: &str =
 /// Tanyakan sesuatu ke Jarvis AI
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "ask",
     aliases("chat", "ai"),
     user_cooldown = "10"
 )]
-pub async fn ask(ctx: Context<'_>, #[rest] question: String) -> Result<(), Error> {
+pub async fn ask(
+    ctx: Context<'_>,
+    #[description = "Pertanyaan untuk Jarvis"]
+    #[rest]
+    question: String,
+) -> Result<(), Error> {
     if !ctx.data().ai.available {
         ctx.send(poise::CreateReply::default().embed(err(NO_BACKEND, None)))
             .await?;
@@ -417,11 +423,17 @@ pub async fn ask(ctx: Context<'_>, #[rest] question: String) -> Result<(), Error
 /// Cari informasi di web
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "search",
     aliases("web", "cari"),
     user_cooldown = "10"
 )]
-pub async fn search(ctx: Context<'_>, #[rest] query: String) -> Result<(), Error> {
+pub async fn search(
+    ctx: Context<'_>,
+    #[description = "Kata kunci yang dicari"]
+    #[rest]
+    query: String,
+) -> Result<(), Error> {
     if !ctx.data().ai.available {
         ctx.send(poise::CreateReply::default().embed(err(NO_BACKEND, None)))
             .await?;
@@ -468,7 +480,7 @@ Akurasi selalu lebih penting daripada gaya bicara."
 }
 
 /// Lihat daftar model AI yang tersedia
-#[poise::command(prefix_command, rename = "model", aliases("models"))]
+#[poise::command(prefix_command, slash_command, rename = "model", aliases("models"))]
 pub async fn list_models(ctx: Context<'_>) -> Result<(), Error> {
     if ctx.data().ai.models.is_empty() {
         ctx.say("Tidak ada model AI yang terkonfigurasi di `.env`.")
@@ -678,11 +690,17 @@ async fn set_status(
 /// Ringkas isi file PDF (attach atau URL)
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "summarize",
     aliases("sum", "ringkas"),
     user_cooldown = "10"
 )]
-pub async fn summarize(ctx: Context<'_>, #[rest] pdf_url: Option<String>) -> Result<(), Error> {
+pub async fn summarize(
+    ctx: Context<'_>,
+    #[description = "URL PDF (kosongkan bila melampirkan file)"]
+    #[rest]
+    pdf_url: Option<String>,
+) -> Result<(), Error> {
     if !ctx.data().ai.available {
         ctx.send(poise::CreateReply::default().embed(err(NO_BACKEND, None)))
             .await?;
@@ -1189,11 +1207,17 @@ async fn generate_image(
 /// Buat gambar AI dari deskripsi teks
 #[poise::command(
     prefix_command,
+    slash_command,
     rename = "image",
     aliases("img", "gambar"),
     user_cooldown = "30"
 )]
-pub async fn image(ctx: Context<'_>, #[rest] prompt: String) -> Result<(), Error> {
+pub async fn image(
+    ctx: Context<'_>,
+    #[description = "Deskripsi gambar yang ingin dibuat"]
+    #[rest]
+    prompt: String,
+) -> Result<(), Error> {
     if ctx.data().ai.custom_image_url.is_none() || ctx.data().ai.custom_image_key.is_none() {
         ctx.send(
             poise::CreateReply::default()

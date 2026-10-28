@@ -94,8 +94,14 @@ fn parse_duration(time_str: &str, allowed_units: &[char]) -> Option<Duration> {
 }
 
 /// Setel pengingat (contoh: !j remind 10m beli kopi)
-#[poise::command(prefix_command, rename = "remind")]
-pub async fn remind(ctx: Context<'_>, time_str: String, #[rest] task: String) -> Result<(), Error> {
+#[poise::command(prefix_command, slash_command, rename = "remind")]
+pub async fn remind(
+    ctx: Context<'_>,
+    #[description = "Waktu pengingat, contoh: 10m (s/m/h/d)"] time_str: String,
+    #[description = "Tugas yang ingin diingatkan"]
+    #[rest]
+    task: String,
+) -> Result<(), Error> {
     const BAD_FORMAT: &str = "Format waktunya belum tepat. Pakai `s` (detik), `m` (menit), `h` (jam), atau `d` (hari). Contoh: `10m`.";
 
     let delta = parse_duration(&time_str, &['s', 'm', 'h', 'd']);
@@ -127,8 +133,11 @@ pub async fn remind(ctx: Context<'_>, time_str: String, #[rest] task: String) ->
 }
 
 /// Setel timer (contoh: !j timer 5m)
-#[poise::command(prefix_command, rename = "timer")]
-pub async fn timer(ctx: Context<'_>, time_str: String) -> Result<(), Error> {
+#[poise::command(prefix_command, slash_command, rename = "timer")]
+pub async fn timer(
+    ctx: Context<'_>,
+    #[description = "Durasi timer, contoh: 5m (s/m/h)"] time_str: String,
+) -> Result<(), Error> {
     const BAD_FORMAT: &str = "Format waktunya belum tepat. Pakai `s`, `m`, atau `h`.";
 
     let delta = parse_duration(&time_str, &['s', 'm', 'h']);
@@ -195,8 +204,13 @@ fn py_round(value: f64, digits: usize) -> String {
 }
 
 /// Cek cuaca di suatu kota
-#[poise::command(prefix_command, rename = "weather")]
-pub async fn weather(ctx: Context<'_>, #[rest] city: String) -> Result<(), Error> {
+#[poise::command(prefix_command, slash_command, rename = "weather")]
+pub async fn weather(
+    ctx: Context<'_>,
+    #[description = "Nama kota"]
+    #[rest]
+    city: String,
+) -> Result<(), Error> {
     let url = format!("https://wttr.in/{}?format=j1", url_encode(&city));
 
     let _typing = ctx.defer_or_broadcast().await;
@@ -595,8 +609,13 @@ impl CalcParser {
 }
 
 /// Kalkulator matematika
-#[poise::command(prefix_command, rename = "calc")]
-pub async fn calc(ctx: Context<'_>, #[rest] expr: String) -> Result<(), Error> {
+#[poise::command(prefix_command, slash_command, rename = "calc")]
+pub async fn calc(
+    ctx: Context<'_>,
+    #[description = "Ekspresi matematika, contoh: (2+3)*4"]
+    #[rest]
+    expr: String,
+) -> Result<(), Error> {
     let expr_clean = expr.replace('^', "**").trim().to_string();
     if expr_clean.chars().count() > 100 {
         ctx.say("Ekspresinya kepanjangan — maksimal 100 karakter.")
@@ -626,7 +645,7 @@ pub async fn calc(ctx: Context<'_>, #[rest] expr: String) -> Result<(), Error> {
 }
 
 /// Lihat statistik sistem host bot
-#[poise::command(prefix_command, rename = "sysinfo", owners_only)]
+#[poise::command(prefix_command, slash_command, rename = "sysinfo", owners_only)]
 pub async fn sysinfo(ctx: Context<'_>) -> Result<(), Error> {
     let stats = tokio::task::spawn_blocking(|| {
         let mut system = System::new_all();
