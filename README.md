@@ -49,8 +49,13 @@ pernah dicetak ke log.
 | `GROQ_API_KEY` | Tidak | Dipakai bila `JARVIS_API_URL` tidak diatur (langsung ke `https://api.groq.com/openai/v1`). |
 | `GROQ_MODEL_1` .. `GROQ_MODEL_3` | Tidak | ID model yang ditawarkan. Harus berpasangan dengan label di bawah. |
 | `GROQ_MODEL_LABEL_1` .. `GROQ_MODEL_LABEL_3` | Tidak | Label tampilan model. Bila pasangan model/label kosong semua, dipakai tiga default: `openai/gpt-oss-120b`, `openai/gpt-oss-20b`, `qwen/qwen3.6-27b`. |
-| `CUSTOM_IMAGE_API_URL` | Tidak | Endpoint untuk perintah `image`. |
+| `CUSTOM_IMAGE_API_URL` | Tidak | Endpoint untuk perintah `image` (lihat [`cf-image-worker/`](cf-image-worker/README.md)). |
 | `CUSTOM_IMAGE_API_KEY` | Tidak | Kunci untuk endpoint gambar di atas. |
+
+Perintah `image` memakai Cloudflare Worker di `cf-image-worker/worker.js` (Cloudflare
+Workers AI). Cara pasang, field opsional (`style`, `seed`, `enhance`, `verify`), arti
+setiap header respons, dan kode statusnya ada di
+[`cf-image-worker/README.md`](cf-image-worker/README.md).
 
 ## Catatan perilaku
 
@@ -66,7 +71,8 @@ pernah dicetak ke log.
   `Content-Type` dan `Content-Length`, dan memotong teks pada 12.000 karakter.
 - **`calc`** memakai evaluator recursive-descent sendiri (tanpa `eval`), dengan
   grammar yang sama seperti whitelist `ast` versi Python.
-- Perintah yang tidak dikenal diabaikan tanpa balasan.
+- Perintah yang tidak dikenal dibalas saran perintah terdekat (`!j pl` → `!j play`);
+  kalau tidak ada yang cukup mirip, bot memberi tahu bahwa perintah itu tidak dikenal.
 
 ## Struktur
 
@@ -83,6 +89,10 @@ src/
     ├── music.rs            # join, play, pause, resume, skip, stop, queue, nowplaying,
     │                       # playinghistory, volume, clearqueue, remove
     └── utility.rs          # ping, cogs, info, help, invite, uptime, stats, userinfo, serverinfo
+
+cf-image-worker/
+├── worker.js               # endpoint gambar (Cloudflare Workers AI)
+└── test.mjs                # tes worker tanpa jaringan: node test.mjs
 ```
 
 ## Yang tidak bisa diverifikasi tanpa kredensial
